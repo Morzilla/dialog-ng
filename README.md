@@ -3,6 +3,8 @@
 KDE's file dialog — the one every KDE app opens to pick or save a file, and that Firefox, Chrome and
 Flatpak apps get through the desktop portal — with:
 
+![The NG file dialog: quick filters above the files and under the places](screenshots/dialog.png)
+
 - **quick filters by kind of file**: All files, Image, Document, Spreadsheet, Archive, Audio, Video,
   Code and data, as a row of chips above the files and as a section under the places; choosing a kind
   shows only those files, without the folders;
