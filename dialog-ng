@@ -1,0 +1,89 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# dialog-ng: KDE's file dialog with quick filters by kind of file and a roomier places sidebar.
+#
+# Only one library is replaced, libKF6KIOFileWidgets. It is built from the same KIO version as the one
+# installed, patched, and put in ~/.local/dialog-ng; the session loads it through LD_LIBRARY_PATH and only
+# while the versions match, so after an update of KDE Frameworks the stock dialog comes back until rebuilt.
+#
+#   ./dialog-ng deps        install the build dependencies (dnf, apt or pacman; asks for sudo)
+#   ./dialog-ng build       fetch KIO at the installed version, patch, build, install in ~/.local/dialog-ng
+#   ./dialog-ng on          load it in the session from the next login
+#   ./dialog-ng off         back to the stock dialog (from the next login)
+#   ./dialog-ng status
+#   ./dialog-ng run CMD     start one program with it now, e.g. ./dialog-ng run kwrite
+#
+# Environment: JOBS (parallel jobs, default half the processors), SRC (sources, default ~/.local/src/dialog-ng).
+set -euo pipefail
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+PREFIX="$HOME/.local/dialog-ng"
+SRC="${SRC:-$HOME/.local/src/dialog-ng}"
+ENVFILE="$HOME/.config/plasma-workspace/env/dialog-ng.sh"
+JOBS="${JOBS:-$(( ($(nproc) + 1) / 2 ))}"
+LIB=libKF6KIOFileWidgets.so.6
+
+system_lib() {
+    for d in /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /usr/lib; do
+        [ -e "$d/$LIB" ] && { readlink -f "$d/$LIB"; return; }
+    done
+    return 1
+}
+kio_version() { basename "$(system_lib)" | sed -n 's/^libKF6KIOFileWidgets\.so\.\([0-9.]*\)$/\1/p'; }
+
+case "${1:-}" in
+deps)
+    if command -v dnf >/dev/null; then sudo dnf install -y git cmake extra-cmake-modules gcc-c++ 'dnf-command(builddep)' && sudo dnf builddep -y kf6-kio
+    elif command -v apt-get >/dev/null; then sudo apt-get install -y git cmake extra-cmake-modules g++ && sudo apt-get build-dep -y kio
+    elif command -v pacman >/dev/null; then sudo pacman -S --needed --noconfirm git cmake extra-cmake-modules base-devel kio
+    else echo "unknown package manager: install KIO's build dependencies by hand"; exit 1; fi ;;
+build)
+    V=$(kio_version); [ -n "$V" ] || { echo "KIO (libKF6KIOFileWidgets) not found"; exit 1; }
+    K="$SRC/kio-$V"
+    if [ ! -d "$K/.git" ]; then
+        echo "==> fetching KIO $V"
+        rm -rf "$K"; mkdir -p "$SRC"
+        git clone -q --depth 1 --branch "v$V" https://invent.kde.org/frameworks/kio.git "$K"
+    else
+        git -C "$K" checkout -q -- . && git -C "$K" clean -qfd
+    fi
+    echo "==> applying dialog-ng.patch"
+    git -C "$K" apply --whitespace=nowarn "$HERE/dialog-ng.patch" || patch -d "$K" -p1 --fuzz=3 < "$HERE/dialog-ng.patch" || { echo "the patch does not apply to KIO $V"; exit 1; }
+    # build what the dialog needs only: ECM may be one release behind KIO, the help worker needs KArchive
+    ECM=$(sed -n 's/.*PACKAGE_VERSION "\([0-9.]*\)".*/\1/p' /usr/share/ECM/cmake/ECMConfigVersion.cmake 2>/dev/null | head -1)
+    if [ -n "$ECM" ]; then
+        sed -i "s/set(KF_DEP_VERSION \"[0-9.]*\")/set(KF_DEP_VERSION \"$ECM\")/; s/find_package(ECM [0-9.]* NO_MODULE)/find_package(ECM $ECM NO_MODULE)/" "$K/CMakeLists.txt"
+    fi
+    sed -i 's/^add_subdirectory( help )/# add_subdirectory( help )/' "$K/src/kioworkers/CMakeLists.txt"
+    echo "==> building (JOBS=$JOBS)"
+    cmake -S "$K" -B "$K/build" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX="$PREFIX" -DBUILD_TESTING=OFF -DBUILD_DESIGNERPLUGIN=OFF >/dev/null
+    nice -n 15 cmake --build "$K/build" --target KF6KIOFileWidgets -j"$JOBS"
+    mkdir -p "$PREFIX/lib"
+    rm -f "$PREFIX/lib/"libKF6KIOFileWidgets.so*
+    cp -a "$K/build/bin/"libKF6KIOFileWidgets.so* "$PREFIX/lib/"
+    echo "==> installed in $PREFIX/lib (KIO $V)" ;;
+on)
+    mkdir -p "$(dirname "$ENVFILE")"
+    cat > "$ENVFILE" <<'END'
+# dialog-ng: KDE's file dialog with quick filters. Loaded only while it matches the installed KIO: after an
+# update of KDE Frameworks the stock library is used again until dialog-ng is rebuilt (dialog-ng build).
+ngdlg="$HOME/.local/dialog-ng/lib"
+for sys in /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /usr/lib; do
+    if [ -e "$sys/libKF6KIOFileWidgets.so.6" ]; then
+        if [ "$(basename "$(readlink -f "$sys/libKF6KIOFileWidgets.so.6")")" = "$(basename "$(readlink -f "$ngdlg/libKF6KIOFileWidgets.so.6" 2>/dev/null)")" ]; then
+            export LD_LIBRARY_PATH="$ngdlg${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        fi
+        break
+    fi
+done
+unset ngdlg sys
+END
+    echo "==> on: log out and in. To try it now in one program: $0 run kwrite" ;;
+off) rm -f "$ENVFILE"; echo "==> off (from the next login)" ;;
+run) shift; LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "$@" ;;
+status)
+    B=$(readlink -f "$PREFIX/lib/$LIB" 2>/dev/null || true)
+    if [ -n "$B" ]; then echo "built:   $(basename "$B")"; else echo "built:   no"; fi
+    echo "system:  $(basename "$(system_lib 2>/dev/null || echo none)")"
+    [ -r "$ENVFILE" ] && echo "session: on" || echo "session: off" ;;
+*) sed -n 3,16p "$0" ;;
+esac

@@ -1,0 +1,200 @@
+dialog-ng: quick filters by kind of file in KDE's file dialog, a roomier places sidebar.
+Applies to KIO (frameworks/kio), from v6.31.0; only src/filewidgets is touched.
+
+diff --git a/src/filewidgets/kfileplacesview.cpp b/src/filewidgets/kfileplacesview.cpp
+index dc8f0f3..3832d20 100644
+--- a/src/filewidgets/kfileplacesview.cpp
++++ b/src/filewidgets/kfileplacesview.cpp
+@@ -90,7 +90,8 @@ QSize KFilePlacesViewDelegate::sizeHint(const QStyleOptionViewItem &option, cons
+     hintOption.features |= QStyleOptionViewItem::HasDecoration;
+     hintOption.decorationSize = {m_iconSize, m_iconSize};
+ 
+-    int height = QApplication::style()->sizeFromContents(QStyle::CT_ItemViewItem, &hintOption, {}, option.widget).height();
++    // kio-ng: a little air above and below each place
++    int height = QApplication::style()->sizeFromContents(QStyle::CT_ItemViewItem, &hintOption, {}, option.widget).height() + 8;
+ 
+     if (m_appearingItems.contains(index)) {
+         height *= m_appearingHeightScale;
+@@ -1830,7 +1831,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
+         return; // We've nothing to display anyway
+     }
+ 
+-    const int minSize = q->style()->pixelMetric(QStyle::PM_SmallIconSize);
++    // kio-ng: never shrink below small-medium icons, even when the list is long
++    const int minSize = qMax(q->style()->pixelMetric(QStyle::PM_SmallIconSize), 22);
+     const int maxSize = 64;
+     QFontMetrics fm = q->fontMetrics();
+ 
+@@ -1889,6 +1891,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
+         size = minSize;
+     } else if (size > maxSize) {
+         size = maxSize;
++    } else if (size < 32) {
++        size = minSize;   // kio-ng: rounding to 16 would undo the minimum
+     } else {
+         // Make it a multiple of 16
+         size &= ~0xf;
+diff --git a/src/filewidgets/kfilewidget.cpp b/src/filewidgets/kfilewidget.cpp
+index 86abbf2..5fd1ec1 100644
+--- a/src/filewidgets/kfilewidget.cpp
++++ b/src/filewidgets/kfilewidget.cpp
+@@ -72,6 +72,8 @@
+ #include <QStandardPaths>
+ #include <QTimer>
+ #include <QToolBar>
++#include <QBoxLayout>
++#include <QToolButton>
+ 
+ #include <algorithm>
+ #include <array>
+@@ -224,6 +226,14 @@ public:
+     QWidget *m_opsWidget = nullptr;
+     QVBoxLayout *m_opsWidgetLayout = nullptr;
+ 
++    // kio-ng: quick filters by kind of file, as a row of chips above the files and as a section under the places
++    void ngInitFilters();
++    void ngSetFilter(int kind);
++    QWidget *ngFilterButtons(QWidget *parent, bool vertical);
++    QWidget *m_ngFilterBar = nullptr;
++    QList<QToolButton *> m_ngFilterButtons;
++    int m_ngFilter = 0;
++
+     QLabel *m_filterLabel = nullptr;
+     KUrlNavigator *m_urlNavigator = nullptr;
+     KMessageWidget *m_messageWidget = nullptr;
+@@ -1149,6 +1159,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
+     m_opsWidgetLayout->addWidget(navWidget);
+     m_opsWidgetLayout->addWidget(m_messageWidget);
+     m_opsWidgetLayout->addWidget(topSeparator);
++    m_ngFilterBar = ngFilterButtons(m_opsWidget, false); // kio-ng
++    m_opsWidgetLayout->addWidget(m_ngFilterBar);
+     m_opsWidgetLayout->addWidget(m_ops);
+     m_opsWidgetLayout->addWidget(bottomSparator);
+ }
+@@ -1503,7 +1515,16 @@ void KFileWidgetPrivate::initPlacesPanel()
+     // TODO: KDE5 ### REMOVE THIS when KDirOperator's initial URL (in the c'tor) is gone.
+     m_placesView->setUrl(m_url);
+ 
+-    m_placesDock->setWidget(m_placesView);
++    {
++        // kio-ng: the quick filters again, as a section under the places
++        auto *side = new QWidget(m_placesDock);
++        auto *sideLayout = new QVBoxLayout(side);
++        sideLayout->setContentsMargins(0, 0, 0, 0);
++        sideLayout->setSpacing(0);
++        sideLayout->addWidget(m_placesView, 1);
++        sideLayout->addWidget(ngFilterButtons(side, true));
++        m_placesDock->setWidget(side);
++    }
+     m_placesViewSplitter->insertWidget(0, m_placesDock);
+ 
+     // initialize the size of the splitter
+@@ -1614,6 +1635,108 @@ void KFileWidgetPrivate::initGUI()
+     updateTabOrder();
+ }
+ 
++// kio-ng: the kinds offered by the quick filters; 0 is "everything the dialog's own filter allows"
++namespace
++{
++struct NgFilterKind {
++    const char *domain;  // KDE translation catalogue the label comes from; nullptr = an NG label
++    const char *context;
++    const char *label;   // English, the msgid in that catalogue
++    const char *labelIt; // only for NG labels, or when the catalogue is not installed
++    const char *icon;
++    const char *patterns;
++};
++QString ngLabel(const char *domain, const char *context, const char *english, const char *italian)
++{
++    const bool it = KLocalizedString::languages().value(0).startsWith(QLatin1String("it"));
++    if (domain) {
++        // KDE's own words where they exist: kfilemetadata names the file categories, KIO has "All Files"
++        const QString t = context ? i18ndc(domain, context, english) : i18nd(domain, english);
++        if (t != QLatin1String(english) || !it) {
++            return t;
++        }
++    }
++    return QString::fromUtf8(it ? italian : english);
++}
++const NgFilterKind ngFilterKinds[] = {
++    {"kio6", nullptr, "All Files", "Tutti i file", "view-grid", ""},
++    {"kfilemetadata6", "@label", "Image", "Immagine", "image-x-generic", "*.png *.jpg *.jpeg *.gif *.webp *.svg *.bmp *.tif *.tiff *.avif *.heic *.ico *.xcf *.kra *.psd"},
++    {"kfilemetadata6", "@label", "Document", "Documento", "x-office-document", "*.pdf *.doc *.docx *.odt *.rtf *.txt *.md *.epub *.tex *.ppt *.pptx *.odp"},
++    {"kfilemetadata6", "@label", "Spreadsheet", "Foglio di calcolo", "x-office-spreadsheet", "*.xls *.xlsx *.ods *.csv *.tsv"},
++    {"kfilemetadata6", "@label", "Archive", "Archivio", "application-zip", "*.zip *.tar *.gz *.tgz *.bz2 *.xz *.zst *.7z *.rar *.iso"},
++    {"kfilemetadata6", "@label", "Audio", "Audio", "audio-x-generic", "*.mp3 *.flac *.ogg *.opus *.wav *.m4a *.aac"},
++    {"kfilemetadata6", "@label", "Video", "Video", "video-x-generic", "*.mp4 *.mkv *.webm *.mov *.avi *.m4v"},
++    {nullptr, nullptr, "Code and data", "Codice e dati", "application-json", "*.json *.xml *.yaml *.yml *.toml *.ini *.conf *.sh *.py *.js *.ts *.c *.cpp *.h *.hpp *.rs *.go *.java *.html *.css *.sql *.qml *.cmake"},
++};
++const int ngFilterCount = sizeof(ngFilterKinds) / sizeof(ngFilterKinds[0]);
++}
++
++QWidget *KFileWidgetPrivate::ngFilterButtons(QWidget *parent, bool vertical)
++{
++    auto *box = new QWidget(parent);
++    QBoxLayout *layout = vertical ? static_cast<QBoxLayout *>(new QVBoxLayout(box)) : static_cast<QBoxLayout *>(new QHBoxLayout(box));
++    layout->setContentsMargins(vertical ? 8 : 6, vertical ? 10 : 6, 8, vertical ? 10 : 6);
++    layout->setSpacing(4);
++    auto *title = new QLabel(ngLabel(nullptr, nullptr, "Filters", "Filtri"), box);
++    title->setEnabled(false);
++    QFont titleFont = title->font();
++    titleFont.setBold(vertical);
++    title->setFont(titleFont);
++    title->setContentsMargins(vertical ? 6 : 2, 0, 6, vertical ? 2 : 0);
++    layout->addWidget(title);
++    for (int kind = 0; kind < ngFilterCount; ++kind) {
++        auto *button = new QToolButton(box);
++        button->setAutoRaise(true);
++        button->setCheckable(true);
++        button->setChecked(kind == m_ngFilter);
++        button->setText(ngLabel(ngFilterKinds[kind].domain, ngFilterKinds[kind].context, ngFilterKinds[kind].label, ngFilterKinds[kind].labelIt));
++        button->setIcon(QIcon::fromTheme(QString::fromLatin1(ngFilterKinds[kind].icon)));
++        button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
++        if (vertical) {   // as tall as the places above, not a cramped list
++            button->setIconSize(QSize(20, 20));
++            button->setMinimumHeight(32);
++        }
++        button->setProperty("_kio_ng_filter", kind);
++
++        QObject::connect(button, &QToolButton::clicked, q, [this, kind] {
++            ngSetFilter(kind);
++        });
++        m_ngFilterButtons.append(button);
++        layout->addWidget(button, 0, vertical ? Qt::AlignLeft : Qt::Alignment());
++    }
++    if (!vertical) {
++        layout->addStretch(1);
++    }
++    return box;
++}
++
++void KFileWidgetPrivate::ngSetFilter(int kind)
++{
++    m_ngFilter = qBound(0, kind, ngFilterCount - 1);
++    for (QToolButton *button : std::as_const(m_ngFilterButtons)) {
++        button->setChecked(button->property("_kio_ng_filter").toInt() == m_ngFilter);
++    }
++    if (m_ngFilter == 0) {
++        slotFileFilterChanged(); // back to what the dialog's own filter says
++        return;
++    }
++    // only this kind, and no folders: the lister keeps folders for a name filter, but not for a type
++    // filter without inode/directory, so the patterns are turned into the file types they stand for
++    const QString patterns = QString::fromLatin1(ngFilterKinds[m_ngFilter].patterns);
++    QStringList types;
++    QMimeDatabase db;
++    for (const QString &pattern : patterns.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
++        const QMimeType type = db.mimeTypeForFile(QLatin1String("x") + pattern.mid(1), QMimeDatabase::MatchExtension);
++        if (type.isValid() && !type.isDefault() && !types.contains(type.name())) {
++            types.append(type.name());
++        }
++    }
++    m_ops->clearFilter();
++    m_ops->setMimeFilter(types);
++    m_ops->setNameFilter(patterns);
++    m_ops->updateDir();
++}
++
+ void KFileWidgetPrivate::slotFileFilterChanged()
+ {
+     m_filterDelayTimer.stop();
