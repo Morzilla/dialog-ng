@@ -30,6 +30,15 @@ The settings are shared by every application (`~/.config/dialog-ngrc`); Dolphin 
 quick preview's too (NG → Previews → Open/Save window). `Glass=false` in its `[Sidebar]` group turns the glass
 off.
 
+## Dolphin NG
+
+Dialog NG is the file dialog of [Dolphin NG](https://github.com/Morzilla/dolphin-ng), a fork of KDE's file
+manager with cards, drawn rows, quick actions, work in progress shown on the files and a glass sidebar: the same
+look, so that picking a file in any application feels like Dolphin NG. Items pinned there come first here, and
+Dolphin NG's settings page sets this dialog's quick preview too.
+
+![Dolphin NG](https://raw.githubusercontent.com/Morzilla/dolphin-ng/ng/ng/screenshots/features/home-cards.png)
+
 The labels come from KDE's own translations (KFileMetaData's file categories, KIO's "All Files"), so they
 follow the language of the desktop.
 

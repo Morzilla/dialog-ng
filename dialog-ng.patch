@@ -62,7 +62,7 @@ index 40a009b..ad0ab7c 100644
      d->m_previewGenerator->setPreviewShown(previewShown);
      action(KDirOperator::ShowPreview)->setChecked(previewShown);
 diff --git a/src/filewidgets/kdiroperatordetailview.cpp b/src/filewidgets/kdiroperatordetailview.cpp
-index a927bc9..a05b0b0 100644
+index a927bc9..50e3db6 100644
 --- a/src/filewidgets/kdiroperatordetailview.cpp
 +++ b/src/filewidgets/kdiroperatordetailview.cpp
 @@ -6,6 +6,27 @@
@@ -113,7 +113,7 @@ index a927bc9..a05b0b0 100644
      if (m_isEmblemClicked) {
          return;
      }
-@@ -158,4 +179,1048 @@ void KDirOperatorDetailView::currentChanged(const QModelIndex &current, const QM
+@@ -158,4 +179,1084 @@ void KDirOperatorDetailView::currentChanged(const QModelIndex &current, const QM
      QTreeView::currentChanged(current, previous);
  }
  
@@ -677,6 +677,37 @@ index a927bc9..a05b0b0 100644
 +    }
 +}
 +
++// Dolphin NG's pushpin: drawn upright on a 24 grid, then tilted like a pin pushed into a board
++void ngDrawPin(QPainter *painter, const QRectF &box, const QColor &ink, bool filled, qreal stroke = 1.7)
++{
++    QPainterPath body;
++    body.moveTo(10, 4);
++    body.lineTo(10, 8.6);
++    body.lineTo(7.2, 11.8);
++    body.quadTo(6.8, 12.3, 7.2, 12.9);
++    body.lineTo(7.6, 13.4);
++    body.lineTo(16.4, 13.4);
++    body.lineTo(16.8, 12.9);
++    body.quadTo(17.2, 12.3, 16.8, 11.8);
++    body.lineTo(14, 8.6);
++    body.lineTo(14, 4);
++    body.closeSubpath();
++    painter->save();
++    painter->setRenderHint(QPainter::Antialiasing);
++    painter->translate(box.center());
++    const qreal k = qMin(box.width(), box.height()) / 24.0;
++    painter->scale(k, k);
++    painter->rotate(40);
++    painter->translate(-12, -12);
++    QPen pen(ink, stroke, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
++    painter->setPen(pen);
++    painter->setBrush(filled ? QBrush(ink) : Qt::NoBrush);
++    painter->drawPath(body);
++    painter->drawLine(QPointF(8.6, 4), QPointF(15.4, 4)); // the head
++    painter->drawLine(QPointF(12, 13.4), QPointF(12, 20.5)); // the needle
++    painter->restore();
++}
++
 +class NgRowDelegate : public QStyledItemDelegate
 +{
 +public:
@@ -822,6 +853,7 @@ index a927bc9..a05b0b0 100644
 +            }
 +        } else {
 +            painter->save();
++            painter->setClipRect(tile.adjusted(-3, -3, 3, 3), Qt::IntersectClip); // some drawings reach past their band
 +            const QString size = item.isDir() ? QString() : KIO::convertSize(item.size());
 +            ngPaintContentSketch(painter, tile, kind.category, kind.sigla, kind.tint, dark, childCount, size, (compact || tileHeight < 30) ? nullptr : &opt.font);
 +            painter->restore();
@@ -858,17 +890,21 @@ index a927bc9..a05b0b0 100644
 +        const bool pinned = ngPinned(item);
 +        const qreal pinRoom = pinned ? 20 : 0;
 +
++        // as in Dolphin NG: a small see-through disc with a hairline, the pushpin filled in a light shade of the
++        // kind's colour
 +        auto drawPin = [&](qreal x, qreal centreY) {
-+            const qreal r = compact ? 7 : 8;
-+            painter->setPen(Qt::NoPen);
-+            painter->setBrush(dark ? QColor(0, 0, 0, 110) : QColor(0, 0, 0, 40));
-+            painter->drawEllipse(QPointF(x + r, centreY), r, r);
-+            QPen pen(dark ? QColor(255, 255, 255, 220) : QColor(40, 44, 50, 220), 1.4);
-+            pen.setCapStyle(Qt::RoundCap);
-+            painter->setPen(pen);
++            const qreal r = compact ? 7.5 : 8.5;
 +            const QPointF c(x + r, centreY);
-+            painter->drawLine(c + QPointF(-2.6, -2.6), c + QPointF(2.6, 2.6)); // the head of the pushpin
-+            painter->drawLine(c + QPointF(-0.5, 0.5), c + QPointF(-3.6, 3.6)); // its needle
++            QColor hairline = fg;
++            hairline.setAlphaF(dark ? 0.16 : 0.14);
++            painter->setPen(QPen(hairline, 1));
++            painter->setBrush(dark ? QColor(14, 15, 18, 150) : QColor(255, 255, 255, 190));
++            painter->drawEllipse(c, r, r);
++            const QColor t = kind.tint;
++            const qreal hue = t.hslHueF() < 0 ? 0 : t.hslHueF();
++            const QColor tint = dark ? QColor::fromHslF(hue, qMin(t.hslSaturationF(), 0.55), 0.78) : QColor::fromHslF(hue, qMin(t.hslSaturationF(), 0.65), 0.38);
++            const qreal glyph = r * 1.35;
++            ngDrawPin(painter, QRectF(c.x() - glyph / 2, c.y() - glyph / 2, glyph, glyph), tint, true, 1.6);
 +        };
 +
 +        if (compact) {
