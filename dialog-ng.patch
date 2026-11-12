@@ -1,8 +1,1303 @@
-dialog-ng: quick filters by kind of file in KDE's file dialog, a roomier places sidebar.
-Applies to KIO (frameworks/kio), from v6.31.0; only src/filewidgets is touched.
-
+diff --git a/src/filewidgets/CMakeLists.txt b/src/filewidgets/CMakeLists.txt
+index 00c5fca..d7b08bd 100644
+--- a/src/filewidgets/CMakeLists.txt
++++ b/src/filewidgets/CMakeLists.txt
+@@ -114,6 +114,7 @@ target_link_libraries(KF6KIOFileWidgets
+     KF6::ConfigGui
+     KF6::BookmarksWidgets
+     KF6::ColorScheme
++    KF6::WindowSystem # kio-ng: the blur behind the glass sidebar
+ )
+ 
+ set(_deprecated_public_header)
+diff --git a/src/filewidgets/kdiroperator.cpp b/src/filewidgets/kdiroperator.cpp
+index 40a009b..ad0ab7c 100644
+--- a/src/filewidgets/kdiroperator.cpp
++++ b/src/filewidgets/kdiroperator.cpp
+@@ -874,6 +874,11 @@ void KDirOperator::setIconSize(int value)
+         return;
+     }
+ 
++    // kio-ng: in the NG rows, zooming (Ctrl + wheel, the zoom actions) makes the rows larger or smaller
++    if (auto *ngRows = qobject_cast<KDirOperatorDetailView *>(d->m_itemView); ngRows && ngRows->ngStyle() != 0) {
++        ngRows->ngZoomBy(value > d->m_iconSize ? 1 : -1);
++    }
++
+     int size = value;
+     // Keep size range in sync with KFileWidgetPrivate::m_stdIconSizes
+     size = std::min(512, size);
+@@ -885,7 +890,10 @@ void KDirOperator::setIconSize(int value)
+         return;
+     }
+ 
+-    d->m_itemView->setIconSize(QSize(size, size));
++    // kio-ng: the NG rows keep their previews at the size of their tile
++    if (auto *ngRows = qobject_cast<KDirOperatorDetailView *>(d->m_itemView); !ngRows || ngRows->ngStyle() == 0) {
++        d->m_itemView->setIconSize(QSize(size, size));
++    }
+     d->m_previewGenerator->updateIcons();
+ 
+     Q_EMIT currentIconSizeChanged(size);
+@@ -1727,6 +1735,11 @@ void KDirOperator::setViewInternal(QAbstractItemView *view)
+ 
+     KFileItemDelegate *delegate = new KFileItemDelegate(d->m_itemView);
+     d->m_itemView->setItemDelegate(delegate);
++    // kio-ng: Dialog NG's rows on the detail view
++    if (auto *detail = qobject_cast<KDirOperatorDetailView *>(d->m_itemView); detail
++        && (KFile::isDetailView(static_cast<KFile::FileView>(d->m_viewKind)) || KFile::isDetailTreeView(static_cast<KFile::FileView>(d->m_viewKind)))) {
++        detail->setNgStyle(property("_ng_rows").toInt());
++    }
+     d->m_itemView->viewport()->setAttribute(Qt::WA_Hover);
+     d->m_itemView->setContextMenuPolicy(Qt::CustomContextMenu);
+     d->m_itemView->setMouseTracking(true);
+@@ -1795,6 +1808,10 @@ void KDirOperator::setViewInternal(QAbstractItemView *view)
+     const bool previewForcedToTrue = d->m_inlinePreviewState == KDirOperatorPrivate::ForcedToTrue;
+     const bool previewShown = d->m_inlinePreviewState == KDirOperatorPrivate::NotForced ? d->m_showPreviews : previewForcedToTrue;
+     d->m_itemView->setIconSize(previewForcedToTrue ? QSize(KIconLoader::SizeHuge, KIconLoader::SizeHuge) : QSize(d->m_iconSize, d->m_iconSize));
++    // kio-ng: the NG rows draw the previews in their own tile: made large enough to be sharp there
++    if (auto *ngRows = qobject_cast<KDirOperatorDetailView *>(d->m_itemView); ngRows && ngRows->ngStyle() != 0) {
++        d->m_itemView->setIconSize(QSize(80, 80));
++    }
+     d->m_previewGenerator = new KFilePreviewGenerator(d->m_itemView);
+     d->m_previewGenerator->setPreviewShown(previewShown);
+     action(KDirOperator::ShowPreview)->setChecked(previewShown);
+diff --git a/src/filewidgets/kdiroperatordetailview.cpp b/src/filewidgets/kdiroperatordetailview.cpp
+index a927bc9..a05b0b0 100644
+--- a/src/filewidgets/kdiroperatordetailview.cpp
++++ b/src/filewidgets/kdiroperatordetailview.cpp
+@@ -6,6 +6,27 @@
+ 
+ #include "kdiroperatordetailview_p.h"
+ #include "kfileitemselectionemblem.h"
++#include <KIO/Global>
++#include <KLocalizedString>
++#include <QDateTime>
++#include <QDir>
++#include <QCursor>
++#include <QElapsedTimer>
++#include <QFile>
++#include <QFileInfo>
++#include <QHash>
++#include <QLocale>
++#include <QPainter>
++#include <QPainterPath>
++#include <QStyledItemDelegate>
++#include <kfileitem.h>
++#include <KConfigGroup>
++#include <KSharedConfig>
++#include <KIO/PreviewJob>
++#include <QKeyEvent>
++#include <QScreen>
++#include <QWindow>
++#include <sys/xattr.h>
+ 
+ #include <kdirlister.h>
+ #include <kdirmodel.h>
+@@ -93,8 +114,8 @@ bool KDirOperatorDetailView::event(QEvent *event)
+         headerView->setStretchLastSection(false);
+         headerView->setSectionsMovable(false);
+ 
+-        setColumnHidden(KDirModel::Size, m_hideDetailColumns);
+-        setColumnHidden(KDirModel::ModifiedTime, m_hideDetailColumns);
++        setColumnHidden(KDirModel::Size, m_hideDetailColumns || m_ngStyle);
++        setColumnHidden(KDirModel::ModifiedTime, m_hideDetailColumns || m_ngStyle);
+         hideColumn(KDirModel::Type);
+         hideColumn(KDirModel::Permissions);
+         hideColumn(KDirModel::Owner);
+@@ -120,7 +141,7 @@ void KDirOperatorDetailView::mousePressEvent(QMouseEvent *event)
+ {
+     const QModelIndex index = indexAt(event->pos());
+     // When selection emblem is clicked, select it and don't do anything else
+-    m_isEmblemClicked = KFileItemSelectionEmblem(this, index, m_dirOperator).handleMousePressEvent(event->pos());
++    m_isEmblemClicked = m_ngStyle == 0 && KFileItemSelectionEmblem(this, index, m_dirOperator).handleMousePressEvent(event->pos());
+     if (m_isEmblemClicked) {
+         return;
+     }
+@@ -158,4 +179,1048 @@ void KDirOperatorDetailView::currentChanged(const QModelIndex &current, const QM
+     QTreeView::currentChanged(current, previous);
+ }
+ 
++// ---------------------------------------------------------------------------------------------------------------
++// kio-ng: the rows of Dialog NG
++namespace
++{
++bool ngItalian()
++{
++    return KLocalizedString::languages().value(0).startsWith(QLatin1String("it"));
++}
++QString ngTr(const char *english, const char *italian)
++{
++    return QString::fromUtf8(ngItalian() ? italian : english);
++}
++QString ngPlural(int n, const char *oneEn, const char *manyEn, const char *oneIt, const char *manyIt)
++{
++    const bool it = ngItalian();
++    return QString::fromUtf8(n == 1 ? (it ? oneIt : oneEn) : (it ? manyIt : manyEn)).arg(n);
++}
++
++// how long ago, the way Dolphin NG says it
++QString ngAgo(const QDateTime &when, bool withTime)
++{
++    if (!when.isValid()) {
++        return QString();
++    }
++    const qint64 days = when.date().daysTo(QDate::currentDate());
++    const QString time = QLocale().toString(when.time(), QLocale::ShortFormat);
++    if (days <= 0) {
++        return withTime ? ngTr("today", "oggi") + QLatin1Char(' ') + time : ngTr("today", "oggi");
++    }
++    if (days == 1) {
++        return withTime ? ngTr("yesterday", "ieri") + QLatin1Char(' ') + time : ngTr("yesterday", "ieri");
++    }
++    if (days < 60) {
++        return ngPlural(int(days), "%1 day ago", "%1 days ago", "%1 giorno fa", "%1 giorni fa");
++    }
++    if (days < 365) {
++        return ngPlural(int(days / 30), "%1 month ago", "%1 months ago", "%1 mese fa", "%1 mesi fa");
++    }
++    return ngPlural(int(days / 365), "%1 year ago", "%1 years ago", "%1 anno fa", "%1 anni fa");
++}
++
++// pinned in Dolphin NG: the mark is kept with the file (extended attribute), read again after a few seconds
++bool ngPinned(const KFileItem &item)
++{
++    static QHash<QString, std::pair<bool, qint64>> cache;
++    static QElapsedTimer clock;
++    if (!clock.isValid()) {
++        clock.start();
++    }
++    const QString path = item.localPath();
++    if (path.isEmpty()) {
++        return false;
++    }
++    auto it = cache.find(path);
++    if (it != cache.end() && clock.elapsed() - it->second < 5000) {
++        return it->first;
++    }
++    const bool pinned = ::getxattr(QFile::encodeName(path).constData(), "user.ng.pinned", nullptr, 0) >= 0;
++    if (cache.size() > 5000) {
++        cache.clear();
++    }
++    cache.insert(path, {pinned, clock.elapsed()});
++    return pinned;
++}
++
++// the group a row belongs to: it follows the sort order (pinned items and, when they come first, folders apart)
++QString ngGroupOf(const KFileItem &item, QDir::SortFlags sorting, bool created)
++{
++    if (ngPinned(item)) {
++        return ngTr("Pinned", "Fissati");
++    }
++    if ((sorting & QDir::DirsFirst) && item.isDir()) {
++        return ngTr("Folders", "Cartelle");
++    }
++    switch (sorting & QDir::SortByMask) {
++    case QDir::Time: {
++        const QDateTime when = item.time(created ? KFileItem::CreationTime : KFileItem::ModificationTime);
++        const qint64 days = when.isValid() ? when.date().daysTo(QDate::currentDate()) : 9999;
++        if (days <= 0) {
++            return ngTr("Today", "Oggi");
++        }
++        if (days == 1) {
++            return ngTr("Yesterday", "Ieri");
++        }
++        if (days < 7) {
++            return ngTr("This week", "Questa settimana");
++        }
++        if (days < 31) {
++            return ngTr("This month", "Questo mese");
++        }
++        if (when.date().year() == QDate::currentDate().year()) {
++            return ngTr("This year", "Quest'anno");
++        }
++        return ngTr("Earlier", "Prima");
++    }
++    case QDir::Type:
++        return item.isDir() ? ngTr("Folders", "Cartelle") : item.mimeComment();
++    case QDir::Size:
++        if (item.isDir()) {
++            return ngTr("Folders", "Cartelle");
++        }
++        if (item.size() < 1024 * 1024) {
++            return ngTr("Small (under 1 MiB)", "Piccoli (meno di 1 MiB)");
++        }
++        if (item.size() < 100 * 1024 * 1024) {
++            return ngTr("Medium (1 to 100 MiB)", "Medi (da 1 a 100 MiB)");
++        }
++        return ngTr("Large (over 100 MiB)", "Grandi (oltre 100 MiB)");
++    default: {
++        const QChar first = item.text().isEmpty() ? QChar() : item.text().at(0).toUpper();
++        return first.isLetter() ? QString(first) : QStringLiteral("#");
++    }
++    }
++}
++
++
++// the kinds of file and their colours, as Dolphin NG has them
++namespace NgKind
++{
++enum Category { Folder, Image, Document, Sheet, Archive, Media, Data, Package, Other, CategoryCount };
++}
++struct NgKindInfo {
++    QString sigla;
++    QColor tint;
++    int category;
++};
++QColor ngCategoryTint(int category)
++{
++    static const QColor tints[NgKind::CategoryCount] = {QColor(201, 205, 213), QColor(195, 164, 230), QColor(143, 188, 230), QColor(127, 214, 168), QColor(230, 183, 122),
++                                                        QColor(127, 208, 193), QColor(230, 164, 200), QColor(240, 163, 154), QColor(176, 181, 191)};
++    return tints[qBound(0, category, int(NgKind::CategoryCount) - 1)];
++}
++NgKindInfo ngKindFor(const QString &name, bool isDir)
++{
++    auto kind = [](const QString &sigla, int category) {
++        // a few types have a colour everybody knows them by, whatever their category: PDF red, slides orange, RPM crimson
++        static const QHash<QString, QColor> own{{QStringLiteral("PDF"), QColor(238, 108, 98)},
++                                                {QStringLiteral("PPT"), QColor(238, 150, 104)},
++                                                {QStringLiteral("PPTX"), QColor(238, 150, 104)},
++                                                {QStringLiteral("ODP"), QColor(238, 150, 104)},
++                                                {QStringLiteral("RPM"), QColor(214, 72, 104)}};
++        const auto colour = own.constFind(sigla);
++        return NgKindInfo{sigla, colour != own.constEnd() ? *colour : ngCategoryTint(category), category};
++    };
++    if (isDir) {
++        return kind(QStringLiteral("DIR"), NgKind::Folder);
++    }
++    const QString lower = name.toLower();
++    static const QList<std::pair<QString, QString>> compound{{QStringLiteral(".tar.gz"), QStringLiteral("TGZ")},
++                                                             {QStringLiteral(".tar.xz"), QStringLiteral("TXZ")},
++                                                             {QStringLiteral(".tar.bz2"), QStringLiteral("TBZ")},
++                                                             {QStringLiteral(".tar.zst"), QStringLiteral("TZST")}};
++    for (const auto &entry : compound) {
++        if (lower.endsWith(entry.first)) {
++            return kind(entry.second, NgKind::Archive);
++        }
++    }
++    const int dot = lower.lastIndexOf(QLatin1Char('.'));
++    const QString ext = (dot > 0 && dot < lower.size() - 1) ? lower.mid(dot + 1) : QString();
++    if (ext.isEmpty() || ext.size() > 5) {
++        return kind(QStringLiteral("FILE"), NgKind::Other);
++    }
++    static const QSet<QString> images{QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"), QStringLiteral("gif"), QStringLiteral("webp"),
++                                      QStringLiteral("svg"), QStringLiteral("bmp"), QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("heic"),
++                                      QStringLiteral("avif"), QStringLiteral("ico"), QStringLiteral("xcf"), QStringLiteral("kra")};
++    static const QSet<QString> documents{QStringLiteral("pdf"), QStringLiteral("doc"), QStringLiteral("docx"), QStringLiteral("odt"), QStringLiteral("rtf"),
++                                         QStringLiteral("txt"), QStringLiteral("md"), QStringLiteral("epub"), QStringLiteral("ppt"), QStringLiteral("pptx"),
++                                         QStringLiteral("odp"), QStringLiteral("msg"), QStringLiteral("eml")};
++    static const QSet<QString> sheets{QStringLiteral("xls"), QStringLiteral("xlsx"), QStringLiteral("ods"), QStringLiteral("csv"), QStringLiteral("tsv")};
++    static const QSet<QString> archives{QStringLiteral("zip"), QStringLiteral("gz"), QStringLiteral("tgz"), QStringLiteral("xz"), QStringLiteral("bz2"),
++                                        QStringLiteral("7z"), QStringLiteral("rar"), QStringLiteral("tar"), QStringLiteral("zst")};
++    static const QSet<QString> medias{QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("ogg"), QStringLiteral("wav"), QStringLiteral("m4a"),
++                                      QStringLiteral("opus"), QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("webm"), QStringLiteral("avi"),
++                                      QStringLiteral("mov"), QStringLiteral("m3u8")};
++    static const QSet<QString> datas{QStringLiteral("json"), QStringLiteral("xml"), QStringLiteral("yaml"), QStringLiteral("yml"), QStringLiteral("toml"),
++                                     QStringLiteral("ini"), QStringLiteral("conf"), QStringLiteral("html"), QStringLiteral("css"), QStringLiteral("js"),
++                                     QStringLiteral("ts"), QStringLiteral("py"), QStringLiteral("rs"), QStringLiteral("c"), QStringLiteral("cpp"),
++                                     QStringLiteral("h"), QStringLiteral("sh"), QStringLiteral("sql"), QStringLiteral("log"), QStringLiteral("reg")};
++    static const QSet<QString> packages{QStringLiteral("rpm"), QStringLiteral("deb"), QStringLiteral("exe"), QStringLiteral("msi"), QStringLiteral("iso"),
++                                        QStringLiteral("img"), QStringLiteral("apk"), QStringLiteral("jar"), QStringLiteral("flatpak"), QStringLiteral("appimage")};
++    const int category = images.contains(ext) ? NgKind::Image
++        : documents.contains(ext)             ? NgKind::Document
++        : sheets.contains(ext)                ? NgKind::Sheet
++        : archives.contains(ext)              ? NgKind::Archive
++        : medias.contains(ext)                ? NgKind::Media
++        : datas.contains(ext)                 ? NgKind::Data
++        : packages.contains(ext)              ? NgKind::Package
++                                              : NgKind::Other;
++    return kind(ext.toUpper(), category);
++}
++// Dolphin NG draws its special folders with a glyph; the dialog's folders are all plain
++QPainterPath ngSpecialFolderGlyph(int)
++{
++    return QPainterPath();
++}
++
++// Dolphin NG's drawing of a kind of file (a page, a table, lines of code, a waveform, a box, a folder...)
++void ngPaintContentSketch(QPainter *painter, const QRectF &band, int category, const QString &sigla, const QColor &tint, bool dark, int count = -1,
++                          const QString &sizeText = QString(), const QFont *font = nullptr, int special = 0, bool whole = false)
++{
++    painter->setRenderHint(QPainter::Antialiasing);
++    // CARDS_BADGE=inside: the type and the size are part of the drawing (printed on the box, the type as the page's
++    // title, the size as its last line...), in the drawing's own colours
++    const bool info = font != nullptr;
++    auto write = [&](const QRectF &r, const QString &t, qreal px, QFont::Weight weight, const QColor &colour, Qt::Alignment align) {
++        if (!info || t.isEmpty()) {
++            return;
++        }
++        QFont f(*font);
++        f.setPixelSize(qMax(7, qRound(px)));
++        f.setWeight(weight);
++        if (weight >= QFont::Black) {
++            f.setLetterSpacing(QFont::PercentageSpacing, 104);
++        }
++        // a word that does not fit shrinks (down to 70 %) before it is cut: "DOCX" on a narrow page stays whole
++        const qreal needed = QFontMetricsF(f).horizontalAdvance(t);
++        if (needed > r.width() && needed > 0) {
++            f.setPixelSize(qMax(7, int(px * qMax(0.6, 0.95 * r.width() / needed))));
++        }
++        painter->setFont(f);
++        painter->setPen(colour);
++        painter->drawText(r, align, QFontMetricsF(f).elidedText(t, Qt::ElideRight, r.width()));
++    };
++    // the writing takes the colour of the drawing: a shade of the type colour, lighter or darker
++    auto shade = [&](qreal lightness, qreal saturation) {
++        const qreal hue = tint.hslHueF();
++        return hue < 0 ? QColor::fromHslF(0, 0, lightness) : QColor::fromHslF(hue, qBound<qreal>(0, tint.hslSaturationF() * saturation, 1), lightness);
++    };
++    const QString ext = sigla.toLower();
++    static const QSet<QString> audio{QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("ogg"), QStringLiteral("wav"), QStringLiteral("opus"), QStringLiteral("m4a"),
++                                     QStringLiteral("aac"), QStringLiteral("wma")};
++    static const QSet<QString> slides{QStringLiteral("ppt"), QStringLiteral("pptx"), QStringLiteral("odp"), QStringLiteral("key")};
++    const qreal u = band.height() / 100.0; // the drawing is laid out for a band 100 high
++    const QColor paper = dark ? QColor(232, 234, 238) : QColor(255, 255, 255);
++    const QColor paperEdge = dark ? QColor(0, 0, 0, 0) : QColor(0, 0, 0, 40);
++    const QColor grey(150, 156, 166);
++    const QColor faint(198, 202, 209);
++    auto bar = [painter](qreal x, qreal y, qreal width, qreal height, const QColor &colour) {
++        painter->setPen(Qt::NoPen);
++        painter->setBrush(colour);
++        painter->drawRoundedRect(QRectF(x, y, width, height), height / 2.0, height / 2.0);
++    };
++    // a sheet of paper in the middle of the band, running off its bottom edge
++    auto sheet = [&](qreal widthFactor) {
++        const qreal width = qMin(band.width() * (whole ? qMin(1.0, widthFactor * 1.25) : widthFactor), band.height() * 2.1);
++        // whole (the Scheda): the page stands entire in the middle of its column; else it runs off the bottom of the band
++        const QRectF page = whole ? QRectF(band.center().x() - width / 2.0, band.top() + 6 * u, width, band.height() - 12 * u)
++                                  : QRectF(band.center().x() - width / 2.0, band.top() + 12 * u, width, band.height());
++        painter->setPen(paperEdge.alpha() ? QPen(paperEdge, 1) : QPen(Qt::NoPen));
++        painter->setBrush(paper);
++        painter->drawRoundedRect(page, 5 * u, 5 * u);
++        if (whole) {
++            // what is drawn on the page stays on it (a table would run past its foot)
++            QPainterPath sheetClip;
++            sheetClip.addRoundedRect(page, 5 * u, 5 * u);
++            painter->setClipPath(sheetClip, Qt::IntersectClip);
++        }
++        return page;
++    };
++
++    if (category == int(NgKind::Folder)) {
++        // a flat folder: a darker back whose tab slopes down into its top edge, a lighter front over nearly all of
++        // it. The count and the size are written at the bottom left of the front, large; a well-known folder of the
++        // home (Downloads, Documents...) carries its own colour (the tint) and a line glyph at the top right
++        const qreal width = whole ? qMin(band.width() * 0.92, (band.height() - 10 * u) / 0.76) : qMin(band.width() * 0.68, 128 * u); // about 3 : 2, not wider
++        const qreal height = qMin(band.height() - (whole ? 8 : 12) * u, width * 0.76);
++        const QRectF body(band.center().x() - width / 2.0, band.center().y() - height / 2.0 + 2 * u, width, height);
++        const qreal hue = tint.hslHueF() < 0 ? 0 : tint.hslHueF();
++        const qreal sat = tint.hslHueF() < 0 ? 0 : tint.hslSaturationF();
++        const QColor back = QColor::fromHslF(hue, sat * 0.62, 0.40);
++        const QColor front = QColor::fromHslF(hue, sat * 0.78, dark ? 0.70 : 0.72);
++        const QColor frontTop = QColor::fromHslF(hue, sat * 0.78, dark ? 0.74 : 0.76);
++        const QColor ink = QColor::fromHslF(hue, sat * 0.6, 0.15), ink2 = QColor::fromHslF(hue, sat * 0.55, 0.27);
++        const qreal radius = qMin(width, height) * 0.09;
++        const qreal tabDepth = height * 0.16;
++        QPainterPath backShape;
++        backShape.addRoundedRect(QRectF(body.left(), body.top() + tabDepth * 0.6, body.width(), body.height() - tabDepth * 0.6), radius, radius);
++        QPainterPath tab;
++        tab.addRoundedRect(QRectF(body.left(), body.top(), body.width() * 0.34, tabDepth * 1.8), radius * 0.8, radius * 0.8);
++        QPolygonF slope;
++        slope << QPointF(body.left() + body.width() * 0.30, body.top()) << QPointF(body.left() + body.width() * 0.34, body.top())
++              << QPointF(body.left() + body.width() * 0.43, body.top() + tabDepth * 0.95) << QPointF(body.left() + body.width() * 0.30, body.top() + tabDepth * 0.95);
++        QPainterPath slopePath;
++        slopePath.addPolygon(slope);
++        slopePath.closeSubpath();
++        backShape = backShape.united(tab).united(slopePath);
++        painter->setPen(Qt::NoPen);
++        painter->setBrush(back);
++        painter->drawPath(backShape);
++        const QRectF cover(body.left(), body.top() + tabDepth, body.width(), body.height() - tabDepth);
++        QLinearGradient shine(cover.topLeft(), cover.bottomLeft());
++        shine.setColorAt(0.0, frontTop);
++        shine.setColorAt(1.0, front);
++        painter->setBrush(shine);
++        painter->drawRoundedRect(cover, radius, radius);
++        if (special > 0) {
++            const qreal side = qMin(cover.height() * 0.36, 30 * u);
++            const QRectF box(cover.right() - side - cover.width() * 0.07, cover.top() + cover.height() * 0.11, side, side);
++            QColor mark = ink;
++            mark.setAlphaF(0.5);
++            painter->save();
++            painter->translate(box.topLeft());
++            painter->scale(side / 24.0, side / 24.0);
++            painter->setPen(QPen(mark, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
++            painter->setBrush(Qt::NoBrush);
++            painter->drawPath(ngSpecialFolderGlyph(special));
++            painter->restore();
++        }
++        if (info && (count >= 0 || !sizeText.isEmpty())) {
++            // the count large, its word smaller on the same baseline ("19 items"), the size under them; when the word
++            // does not fit, the number alone (never an ellipsis)
++            const QRectF text = cover.adjusted(cover.width() * 0.09, cover.height() * 0.10, -cover.width() * 0.07, -cover.height() * 0.12);
++            QFont numberFont(*font), wordFont(*font), sizeFont(*font);
++            numberFont.setPixelSize(qMax(10, qRound(cover.height() * 0.30)));
++            numberFont.setWeight(QFont::Black);
++            wordFont.setPixelSize(qMax(8, qRound(cover.height() * 0.15)));
++            wordFont.setWeight(QFont::DemiBold);
++            sizeFont.setPixelSize(qMax(8, qRound(cover.height() * 0.165)));
++            sizeFont.setWeight(QFont::Bold);
++            const QFontMetricsF numberFm(numberFont), wordFm(wordFont), sizeFm(sizeFont);
++            qreal bottom = text.bottom();
++            if (!sizeText.isEmpty()) {
++                painter->setFont(sizeFont);
++                painter->setPen(ink2);
++                painter->drawText(QPointF(text.left(), bottom - sizeFm.descent()), sizeFm.elidedText(sizeText, Qt::ElideRight, text.width()));
++                bottom -= sizeFm.height() + cover.height() * 0.02;
++            }
++            if (count >= 0) {
++                const QString number = QString::number(count);
++                const qreal baseline = bottom - numberFm.descent();
++                painter->setFont(numberFont);
++                painter->setPen(ink);
++                painter->drawText(QPointF(text.left(), baseline), number);
++                const QString word = count == 1 ? ngTr("item", "elemento") : ngTr("items", "elementi");
++                const qreal wordLeft = text.left() + numberFm.horizontalAdvance(number) + wordFm.height() * 0.3;
++                if (wordLeft + wordFm.horizontalAdvance(word) <= text.right()) {
++                    painter->setFont(wordFont);
++                    painter->setPen(ink2);
++                    painter->drawText(QPointF(wordLeft, baseline), word);
++                }
++            }
++        }
++    } else if (category == int(NgKind::Sheet)) {
++        const QRectF page = sheet(0.62);
++        const qreal left = page.left() + 9 * u, right = page.right() - 9 * u, rowHeight = 15 * u;
++        qreal top = page.top() + (info ? 32 * u : 10 * u);
++        if (info) {
++            // the size beside the title, or under it when the page is too narrow for both (a small drawing)
++            QFont titleFont(*font), sizeFont(*font);
++            titleFont.setPixelSize(qMax(7, qRound(22 * u)));
++            titleFont.setWeight(QFont::Black);
++            titleFont.setLetterSpacing(QFont::PercentageSpacing, 104);
++            sizeFont.setPixelSize(qMax(7, qRound(12 * u)));
++            sizeFont.setWeight(QFont::Bold);
++            const bool beside = QFontMetricsF(titleFont).horizontalAdvance(sigla) + QFontMetricsF(sizeFont).horizontalAdvance(sizeText) + 8 * u <= right - left;
++            write(QRectF(left, page.top() + 5 * u, right - left, 24 * u), sigla, 22 * u, QFont::Black, shade(0.42, 1.0), Qt::AlignLeft | Qt::AlignVCenter);
++            if (beside) {
++                write(QRectF(left, page.top() + 5 * u, right - left, 24 * u), sizeText, 12 * u, QFont::Bold, shade(0.4, 0.4), Qt::AlignRight | Qt::AlignVCenter);
++            } else {
++                write(QRectF(left, page.top() + 27 * u, right - left, 15 * u), sizeText, 12 * u, QFont::Bold, shade(0.4, 0.4), Qt::AlignLeft | Qt::AlignVCenter);
++                top += 14 * u;
++            }
++        }
++        QColor head = tint;
++        head.setAlphaF(0.55);
++        painter->fillRect(QRectF(left, top, right - left, rowHeight), head);
++        painter->setPen(QPen(faint, 1));
++        for (int row = 0; row <= 6; ++row) {
++            painter->drawLine(QPointF(left, top + row * rowHeight), QPointF(right, top + row * rowHeight));
++        }
++        for (int column = 0; column <= 4; ++column) {
++            const qreal x = left + (right - left) * column / 4.0;
++            painter->drawLine(QPointF(x, top), QPointF(x, page.bottom()));
++        }
++        for (int row = 1; row < 6; ++row) {
++            for (int column = 0; column < 4; ++column) {
++                const qreal x = left + (right - left) * column / 4.0;
++                bar(x + 4 * u, top + row * rowHeight + 5.5 * u, (right - left) / 4.0 * (0.35 + 0.12 * ((row * 3 + column) % 4)), 4 * u, column == 0 ? grey : faint);
++            }
++        }
++    } else if (category == int(NgKind::Data)) {
++        // lines of code on a dark editor
++        const qreal width = qMin(band.width() * 0.7, band.height() * 2.4);
++        const QRectF editor(band.center().x() - width / 2.0, band.top() + 12 * u, width, band.height());
++        painter->setPen(QPen(QColor(255, 255, 255, 28), 1));
++        painter->setBrush(QColor(20, 22, 27));
++        painter->drawRoundedRect(editor, 5 * u, 5 * u);
++        static const qreal indent[] = {0, 1, 1, 2, 2, 1, 0}, length[] = {0.34, 0.52, 0.30, 0.44, 0.26, 0.38, 0.2};
++        QColor bright = tint.lighter(125), soft(120, 128, 140);
++        for (int i = 0; i < 7; ++i) {
++            const qreal x = editor.left() + 10 * u + indent[i] * 12 * u, y = editor.top() + 11 * u + i * 12 * u;
++            if (info && (i == 0 || i == 5)) {
++                const QRectF line(editor.left() + 10 * u, y - 4.5 * u, editor.width() - 20 * u, 13 * u);
++                if (i == 0) {
++                    write(line.adjusted(0, -2 * u, 0, 2 * u), QStringLiteral("#!") + sigla, 14 * u, QFont::Black, bright, Qt::AlignLeft | Qt::AlignVCenter);
++                } else {
++                    write(line.adjusted(0, -2 * u, 0, 2 * u), QStringLiteral("# ") + sizeText, 12 * u, QFont::Bold, shade(0.62, 0.35), Qt::AlignLeft | Qt::AlignVCenter);
++                }
++                continue;
++            }
++            if (info && i == 6) {
++                continue;
++            }
++            bar(x, y, editor.width() * 0.16, 4.5 * u, i % 3 == 0 ? bright : soft);
++            bar(x + editor.width() * 0.16 + 5 * u, y, editor.width() * length[i], 4.5 * u, i % 2 ? QColor(170, 178, 190) : soft);
++        }
++    } else if (category == int(NgKind::Media) && audio.contains(ext)) {
++        // a waveform across the band
++        const int count = 34;
++        const qreal step = band.width() * 0.8 / count, x0 = band.left() + band.width() * 0.1;
++        QColor wave = tint.lighter(120);
++        const qreal middle = info ? band.top() + band.height() * 0.38 : band.center().y();
++        for (int i = 0; i < count; ++i) {
++            const qreal amount = 0.18 + 0.82 * qAbs(std::sin(i * 0.55) * std::cos(i * 0.23 + 1.0));
++            const qreal height = band.height() * (info ? 0.5 : 0.62) * amount;
++            wave.setAlphaF(0.55 + 0.4 * amount);
++            bar(x0 + i * step, middle - height / 2.0, qMax(2.0, step * 0.55), height, wave);
++        }
++        if (info) {
++            const qreal baseline = band.bottom() - 26 * u;
++            QColor rule = tint;
++            rule.setAlphaF(0.5);
++            painter->setPen(QPen(rule, 1.5));
++            painter->drawLine(QPointF(x0, baseline), QPointF(x0 + count * step, baseline));
++            const QRectF text(x0, baseline + 2 * u, count * step, 22 * u);
++            write(text, sigla, 15 * u, QFont::Black, shade(0.7, 1.0), Qt::AlignLeft | Qt::AlignVCenter);
++            write(text, sizeText, 12.5 * u, QFont::Bold, shade(0.8, 0.6), Qt::AlignRight | Qt::AlignVCenter);
++        }
++    } else if (category == int(NgKind::Media)) {
++        // a frame of film with the play mark
++        const qreal width = qMin(band.width() * 0.56, band.height() * 1.5), height = band.height() * 0.72;
++        const QRectF frame(band.center().x() - width / 2.0, band.center().y() - height / 2.0, width, height);
++        painter->setPen(QPen(QColor(255, 255, 255, 40), 1));
++        painter->setBrush(QColor(14, 15, 19));
++        painter->drawRoundedRect(frame, 6 * u, 6 * u);
++        for (int i = 0; i < 5; ++i) {
++            const qreal y = frame.top() + frame.height() * (i + 0.5) / 5.0 - 3 * u;
++            painter->setPen(Qt::NoPen);
++            painter->setBrush(QColor(255, 255, 255, 60));
++            painter->drawRoundedRect(QRectF(frame.left() + 5 * u, y, 6 * u, 6 * u), 1.5 * u, 1.5 * u);
++            painter->drawRoundedRect(QRectF(frame.right() - 11 * u, y, 6 * u, 6 * u), 1.5 * u, 1.5 * u);
++        }
++        QPainterPath play;
++        const qreal side = height * 0.36;
++        play.moveTo(frame.center().x() - side * 0.38, frame.center().y() - side / 2.0);
++        play.lineTo(frame.center().x() + side * 0.55, frame.center().y());
++        play.lineTo(frame.center().x() - side * 0.38, frame.center().y() + side / 2.0);
++        play.closeSubpath();
++        painter->setPen(QPen(tint.lighter(125), 2 * u, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
++        painter->setBrush(tint.lighter(125));
++        painter->drawPath(play);
++        if (info) {
++            const QRectF text = QRectF(frame.left() + 15 * u, frame.bottom() - 21 * u, frame.width() - 30 * u, 18 * u);
++            write(text, sigla, 13 * u, QFont::Black, shade(0.72, 1.0), Qt::AlignLeft | Qt::AlignVCenter);
++            write(text, sizeText, 11 * u, QFont::Bold, shade(0.82, 0.5), Qt::AlignRight | Qt::AlignVCenter);
++        }
++    } else if (category == int(NgKind::Archive) || category == int(NgKind::Package)) {
++        // a parcel: a box with its tape and a label
++        // whole (the Scheda): the box takes most of its column and stands entire, its lid included
++        const qreal width = whole ? qMin(band.width() * 0.84, band.height() * 1.15) : qMin(band.width() * 0.46, band.height() * 1.3);
++        const QRectF box = whole ? QRectF(band.center().x() - width / 2.0, band.top() + 16 * u, width, band.height() - 22 * u)
++                                 : QRectF(band.center().x() - width / 2.0, band.top() + 18 * u, width, band.height());
++        QColor card = tint;
++        card.setAlphaF(1.0);
++        painter->setPen(Qt::NoPen);
++        painter->setBrush(card.darker(dark ? 135 : 110));
++        painter->drawRoundedRect(box, 5 * u, 5 * u);
++        painter->setBrush(card.lighter(118));
++        painter->drawRoundedRect(QRectF(box.left() - 4 * u, box.top() - 6 * u, box.width() + 8 * u, 15 * u), 4 * u, 4 * u);
++        if (category == int(NgKind::Archive)) {
++            // the zip: teeth down the middle (down the left side when the box carries its type and size)
++            const qreal teeth = info ? box.left() + 11 * u : box.center().x();
++            for (int i = 0; i < 7; ++i) {
++                bar(teeth - (i % 2 ? 0 : 5 * u), box.top() + 14 * u + i * 8 * u, 5 * u, 4.5 * u, QColor(255, 255, 255, 190));
++            }
++        } else {
++            painter->setBrush(QColor(255, 255, 255, 70));
++            painter->drawRect(QRectF(box.center().x() - 5 * u, box.top() - 6 * u, 10 * u, band.height()));
++            if (!info) {
++                painter->setBrush(paper);
++                painter->drawRoundedRect(QRectF(box.left() + 8 * u, box.top() + 22 * u, box.width() * 0.34, 20 * u), 2 * u, 2 * u);
++            }
++        }
++        if (info) {
++            // printed on the side of the box, in a pale shade of the box itself
++            const QRectF side = box.adjusted(category == int(NgKind::Archive) ? 20 * u : 6 * u, 16 * u, -6 * u, 0);
++            write(QRectF(side.left(), side.top(), side.width(), 32 * u), sigla, 29 * u, QFont::Black, shade(0.86, 0.95), Qt::AlignHCenter | Qt::AlignVCenter);
++            write(QRectF(side.left(), side.top() + 31 * u, side.width(), 18 * u), sizeText, 13 * u, QFont::Bold, shade(0.8, 0.75), Qt::AlignHCenter | Qt::AlignVCenter);
++        }
++    } else if (category == int(NgKind::Image)) {
++        // a picture that could not be previewed: sky, sun and hills
++        const QRectF page = sheet(0.6);
++        const QRectF view = page.adjusted(7 * u, 7 * u, -7 * u, 0);
++        QColor sky = tint;
++        sky.setAlphaF(0.30);
++        painter->fillRect(view, sky);
++        painter->setPen(Qt::NoPen);
++        painter->setBrush(QColor(240, 196, 92));
++        painter->drawEllipse(QPointF(view.right() - 22 * u, view.top() + 20 * u), 8 * u, 8 * u);
++        QPainterPath hills;
++        hills.moveTo(view.left(), view.bottom());
++        hills.lineTo(view.left(), view.top() + 62 * u);
++        hills.lineTo(view.left() + view.width() * 0.3, view.top() + 34 * u);
++        hills.lineTo(view.left() + view.width() * 0.52, view.top() + 58 * u);
++        hills.lineTo(view.left() + view.width() * 0.7, view.top() + 44 * u);
++        hills.lineTo(view.right(), view.top() + 68 * u);
++        hills.lineTo(view.right(), view.bottom());
++        hills.closeSubpath();
++        painter->setClipRect(view, Qt::IntersectClip);
++        painter->fillPath(hills, tint.darker(115));
++        if (info) {
++            const QRectF text(view.left() + 7 * u, view.top() + 64 * u, view.width() - 14 * u, 20 * u);
++            write(text, sigla, 13 * u, QFont::Black, shade(0.93, 0.6), Qt::AlignLeft | Qt::AlignVCenter);
++            write(text, sizeText, 11 * u, QFont::Bold, shade(0.88, 0.5), Qt::AlignRight | Qt::AlignVCenter);
++        }
++    } else if (slides.contains(ext)) {
++        // a slide: a title and a small chart
++        const qreal width = qMin(band.width() * 0.66, band.height() * 2.2);
++        const QRectF slide(band.center().x() - width / 2.0, band.top() + 14 * u, width, band.height());
++        painter->setPen(paperEdge.alpha() ? QPen(paperEdge, 1) : QPen(Qt::NoPen));
++        painter->setBrush(paper);
++        painter->drawRoundedRect(slide, 5 * u, 5 * u);
++        if (info) {
++            write(QRectF(slide.left() + 10 * u, slide.top() + 4 * u, slide.width() * 0.6, 24 * u), sigla, 21 * u, QFont::Black, shade(0.48, 1.0), Qt::AlignLeft | Qt::AlignVCenter);
++            write(QRectF(slide.left() + 10 * u, slide.top() + 27 * u, slide.width() * 0.6, 15 * u), sizeText, 12 * u, QFont::Bold, shade(0.42, 0.4), Qt::AlignLeft | Qt::AlignVCenter);
++        } else {
++            bar(slide.left() + 10 * u, slide.top() + 11 * u, slide.width() * 0.42, 6 * u, tint);
++            bar(slide.left() + 10 * u, slide.top() + 24 * u, slide.width() * 0.30, 4 * u, faint);
++        }
++        static const qreal heights[] = {0.30, 0.52, 0.40, 0.70};
++        for (int i = 0; i < 4; ++i) {
++            const qreal h = band.height() * heights[i] * 0.7;
++            painter->setPen(Qt::NoPen);
++            painter->setBrush(i == 3 ? tint : faint);
++            painter->drawRoundedRect(QRectF(slide.right() - (4 - i) * 16 * u - 6 * u, slide.bottom() - h, 11 * u, h + 4 * u), 2 * u, 2 * u);
++        }
++        bar(slide.left() + 10 * u, slide.top() + 40 * u, slide.width() * 0.26, 4 * u, faint);
++        bar(slide.left() + 10 * u, slide.top() + 52 * u, slide.width() * 0.20, 4 * u, faint);
++    } else {
++        // a page of text: a heading in the colour of the type, then lines
++        const QRectF page = sheet(0.56);
++        const qreal left = page.left() + 11 * u, width = page.width() - 22 * u;
++        if (info) {
++            write(QRectF(left, page.top() + 4 * u, width, 26 * u), sigla, 23 * u, QFont::Black, shade(0.48, 1.0), Qt::AlignLeft | Qt::AlignVCenter);
++        } else {
++            bar(left, page.top() + 14 * u, width * 0.62, 5 * u, tint);
++        }
++        static const qreal lines[] = {1.0, 1.0, 0.82, 0.0, 1.0, 0.94, 0.6};
++        for (int i = 0; i < 7; ++i) {
++            if (info && i == 4) {
++                write(QRectF(left, page.top() + 30 * u + i * 10 * u - 6 * u, width, 16 * u), sizeText, 12.5 * u, QFont::Bold, shade(0.42, 0.4), Qt::AlignLeft | Qt::AlignVCenter);
++                break;
++            }
++            if (lines[i] > 0) {
++                bar(left, page.top() + 30 * u + i * 10 * u, width * lines[i], 4 * u, i < 3 ? grey : faint);
++            }
++        }
++    }
++}
++
++class NgRowDelegate : public QStyledItemDelegate
++{
++public:
++    NgRowDelegate(KDirOperator *op, int style, QObject *parent)
++        : QStyledItemDelegate(parent)
++        , m_op(op)
++        , m_style(style)
++    {
++    }
++
++    // the rows grow and shrink with Ctrl + wheel (the "_ng_scale" of the dir operator); the words grow less
++    qreal scale() const
++    {
++        const qreal value = m_op->property("_ng_scale").toReal();
++        return value > 0 ? value : 1.0;
++    }
++    QFont scaledFont(const QFont &font) const
++    {
++        QFont f = font;
++        f.setPointSizeF(f.pointSizeF() * (1.0 + (scale() - 1.0) * 0.5));
++        return f;
++    }
++    int rowHeight(const QStyleOptionViewItem &option) const
++    {
++        const int line = QFontMetrics(scaledFont(option.font)).height();
++        return int((m_style == 2 ? qMax(26, line + 8) : qMax(40, line * 2 + 8)) * (0.6 + 0.4 * scale()));
++    }
++
++    QString groupOf(const QModelIndex &index) const
++    {
++        return ngGroupOf(index.data(KDirModel::FileItemRole).value<KFileItem>(), m_op->sorting(), m_op->property("_ng_created").toBool());
++    }
++
++    int headerHeight(const QModelIndex &index, const QStyleOptionViewItem &option) const
++    {
++        if (!m_op->property("_ng_groups").toBool() || index.parent().isValid()) {
++            return 0;
++        }
++        const bool first = index.row() == 0 || groupOf(index.sibling(index.row() - 1, 0)) != groupOf(index);
++        return first ? option.fontMetrics.height() + (index.row() == 0 ? 10 : 18) : 0;
++    }
++
++    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
++    {
++        return QSize(200, rowHeight(option) + headerHeight(index, option));
++    }
++
++    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
++    {
++        const KFileItem item = index.data(KDirModel::FileItemRole).value<KFileItem>();
++        if (item.isNull()) {
++            QStyledItemDelegate::paint(painter, option, index);
++            return;
++        }
++        const bool compact = m_style == 2;
++        QStyleOptionViewItem scaledOption = option;
++        scaledOption.font = scaledFont(option.font);
++        scaledOption.fontMetrics = QFontMetrics(scaledOption.font);
++        const QStyleOptionViewItem &opt = scaledOption;
++        const QPalette &pal = option.palette;
++        const QColor fg = pal.color(QPalette::Text);
++        const bool dark = pal.color(QPalette::Base).lightnessF() < 0.5;
++        QColor dim = fg;
++        dim.setAlphaF(0.62);
++
++        painter->save();
++        painter->setRenderHint(QPainter::Antialiasing);
++        QRectF row = option.rect;
++
++        // the group title, above the first row of a group
++        const int header = headerHeight(index, option);
++        if (header > 0) {
++            QFont titleFont = option.font;
++            titleFont.setPointSizeF(titleFont.pointSizeF() * 0.86);
++            titleFont.setWeight(QFont::DemiBold);
++            titleFont.setCapitalization(QFont::AllUppercase);
++            titleFont.setLetterSpacing(QFont::PercentageSpacing, 104);
++            painter->setFont(titleFont);
++            painter->setPen(dim);
++            painter->drawText(QRectF(row.left() + 12, row.top(), row.width() - 24, header - 3), Qt::AlignLeft | Qt::AlignBottom, groupOf(index));
++            row.setTop(row.top() + header);
++        }
++
++        // the row: a soft tile; the selection and the pointer tint it
++        const QRectF cell = compact ? row.adjusted(4, 1, -6, -1) : row.adjusted(4, 1.5, -6, -1.5);
++        const qreal radius = compact ? 6 : 9;
++        QColor ground;
++        if (option.state & QStyle::State_Selected) {
++            ground = pal.color(QPalette::Highlight);
++            ground.setAlphaF(dark ? 0.38 : 0.28);
++        } else if (option.state & QStyle::State_MouseOver) {
++            ground = fg;
++            ground.setAlphaF(0.07);
++        } else if (!compact) {
++            ground = fg;
++            ground.setAlphaF(dark ? 0.035 : 0.03);
++        }
++        if (ground.isValid()) {
++            painter->setPen(Qt::NoPen);
++            painter->setBrush(ground);
++            painter->drawRoundedRect(cell, radius, radius);
++        }
++
++        // the tile of the kind: Dolphin NG's drawing of it (a folder with how many items it holds, a page, a table, a
++        // waveform...), or the file's own preview
++        const qreal tileHeight = compact ? qMax(18.0, cell.height() - 6) : qMax(28.0, cell.height() - 8);
++        const QSizeF tileSize(qRound(tileHeight * (compact ? 1.6 : 1.5)), tileHeight);
++        const QRectF tile(cell.left() + (compact ? 6 : 8), cell.center().y() - tileSize.height() / 2, tileSize.width(), tileSize.height());
++        const NgKindInfo kind = ngKindFor(item.name(), item.isDir());
++        int childCount = -1;
++        if (item.isDir()) {
++            const QVariant count = index.sibling(index.row(), KDirModel::Size).data(KDirModel::ChildCountRole);
++            childCount = count.typeId() == QMetaType::Int ? count.toInt() : -1;
++        }
++        const QIcon preview = item.isDir() ? QIcon() : index.data(Qt::DecorationRole).value<QIcon>();
++        if (!preview.isNull() && preview.name().isEmpty()) {
++            // a real preview (the preview generator's pictures have no theme name): the picture itself, cropped to
++            // the tile, with the kind's letters in a corner
++            const qreal dpr = painter->device() ? painter->device()->devicePixelRatioF() : 1.0;
++            const QPixmap pixmap = preview.pixmap(QSize(80, 80), dpr);
++            const QSizeF source = QSizeF(pixmap.size()) / pixmap.devicePixelRatio();
++            const qreal fit = qMax(tile.width() / source.width(), tile.height() / source.height());
++            const QSizeF drawn = source * fit;
++            const QRectF target(tile.center().x() - drawn.width() / 2, tile.center().y() - drawn.height() / 2, drawn.width(), drawn.height());
++            QPainterPath clip;
++            clip.addRoundedRect(tile, compact ? 4 : 5, compact ? 4 : 5);
++            painter->save();
++            painter->setClipPath(clip, Qt::IntersectClip);
++            painter->drawPixmap(target, pixmap, QRectF(QPointF(0, 0), QSizeF(pixmap.size())));
++            painter->restore();
++            if (!compact) {
++                QFont badgeFont = opt.font;
++                badgeFont.setPixelSize(8);
++                badgeFont.setWeight(QFont::Black);
++                const QFontMetricsF badgeFm(badgeFont);
++                const QRectF badge(tile.left(), tile.bottom() - badgeFm.height() - 1, badgeFm.horizontalAdvance(kind.sigla) + 6, badgeFm.height() + 1);
++                painter->setPen(Qt::NoPen);
++                painter->setBrush(kind.tint.darker(dark ? 100 : 120));
++                painter->drawRoundedRect(badge, 2.5, 2.5);
++                painter->setFont(badgeFont);
++                painter->setPen(QColor(30, 33, 38));
++                painter->drawText(badge, Qt::AlignCenter, kind.sigla);
++            }
++        } else {
++            painter->save();
++            const QString size = item.isDir() ? QString() : KIO::convertSize(item.size());
++            ngPaintContentSketch(painter, tile, kind.category, kind.sigla, kind.tint, dark, childCount, size, (compact || tileHeight < 30) ? nullptr : &opt.font);
++            painter->restore();
++        }
++
++        // the words: name (with the pushpin of a pinned item), type and size, how long ago it changed
++        const qreal left = tile.right() + (compact ? 10 : 12);
++        const qreal right = cell.right() - 12;
++        QFont nameFont = opt.font;
++        nameFont.setWeight(compact ? QFont::Medium : QFont::DemiBold);
++        QFont smallFont = opt.font;
++        smallFont.setPointSizeF(smallFont.pointSizeF() * (compact ? 0.9 : 0.88));
++        const QFontMetricsF nameFm(nameFont), smallFm(smallFont);
++
++        QString meta;
++        if (item.isDir()) {
++            meta = childCount >= 0 ? ngPlural(childCount, "%1 item", "%1 items", "%1 elemento", "%1 elementi") : ngTr("Folder", "Cartella");
++            if (!compact) {
++                meta = ngTr("Folder", "Cartella") + (childCount >= 0 ? QStringLiteral(" · ") + meta : QString());
++            }
++        } else {
++            meta = item.mimeComment() + QStringLiteral(" · ") + KIO::convertSize(item.size());
++        }
++        // the date the folder is sorted by: of creation when chosen so
++        const bool created = m_op->property("_ng_created").toBool() && (m_op->sorting() & QDir::SortByMask) == QDir::Time;
++        const QString ago = ngAgo(item.time(created ? KFileItem::CreationTime : KFileItem::ModificationTime), compact);
++        const QString changed = created ? ngTr("Created ", "Creato ") : ngTr("Modified ", "Modificato ");
++        QFont agoBold = smallFont;
++        agoBold.setWeight(QFont::DemiBold);
++        const QFontMetricsF agoBoldFm(agoBold);
++        const qreal agoWidth = compact ? smallFm.horizontalAdvance(ago) : smallFm.horizontalAdvance(changed) + agoBoldFm.horizontalAdvance(ago);
++        const bool showAgo = right - left > agoWidth + 120;
++        const qreal textRight = showAgo ? right - agoWidth - 16 : right;
++        const bool pinned = ngPinned(item);
++        const qreal pinRoom = pinned ? 20 : 0;
++
++        auto drawPin = [&](qreal x, qreal centreY) {
++            const qreal r = compact ? 7 : 8;
++            painter->setPen(Qt::NoPen);
++            painter->setBrush(dark ? QColor(0, 0, 0, 110) : QColor(0, 0, 0, 40));
++            painter->drawEllipse(QPointF(x + r, centreY), r, r);
++            QPen pen(dark ? QColor(255, 255, 255, 220) : QColor(40, 44, 50, 220), 1.4);
++            pen.setCapStyle(Qt::RoundCap);
++            painter->setPen(pen);
++            const QPointF c(x + r, centreY);
++            painter->drawLine(c + QPointF(-2.6, -2.6), c + QPointF(2.6, 2.6)); // the head of the pushpin
++            painter->drawLine(c + QPointF(-0.5, 0.5), c + QPointF(-3.6, 3.6)); // its needle
++        };
++
++        if (compact) {
++            const qreal mid = cell.center().y();
++            const QString name = nameFm.elidedText(item.text(), Qt::ElideMiddle, qMax(40.0, (textRight - left) * 0.62 - pinRoom));
++            const qreal nameWidth = nameFm.horizontalAdvance(name);
++            painter->setFont(nameFont);
++            painter->setPen(fg);
++            painter->drawText(QRectF(left, cell.top(), nameWidth + 2, cell.height()), Qt::AlignLeft | Qt::AlignVCenter, name);
++            qreal x = left + nameWidth + 8;
++            if (pinned) {
++                drawPin(x - 3, mid);
++                x += pinRoom;
++            }
++            painter->setFont(smallFont);
++            painter->setPen(dim);
++            painter->drawText(QRectF(x + 4, cell.top(), qMax(0.0, textRight - x - 4), cell.height()),
++                              Qt::AlignLeft | Qt::AlignVCenter,
++                              smallFm.elidedText(meta, Qt::ElideRight, qMax(0.0, textRight - x - 4)));
++            if (showAgo) {
++                painter->drawText(QRectF(right - agoWidth, cell.top(), agoWidth, cell.height()), Qt::AlignRight | Qt::AlignVCenter, ago);
++            }
++        } else {
++            const qreal block = nameFm.height() + smallFm.height() + 2;
++            const qreal top = cell.center().y() - block / 2;
++            const QString name = nameFm.elidedText(item.text(), Qt::ElideMiddle, qMax(40.0, textRight - left - pinRoom));
++            painter->setFont(nameFont);
++            painter->setPen(fg);
++            painter->drawText(QRectF(left, top, textRight - left, nameFm.height()), Qt::AlignLeft | Qt::AlignVCenter, name);
++            if (pinned) {
++                drawPin(left + nameFm.horizontalAdvance(name) + 6, top + nameFm.height() / 2);
++            }
++            painter->setFont(smallFont);
++            painter->setPen(dim);
++            painter->drawText(QRectF(left, top + nameFm.height() + 2, textRight - left, smallFm.height()),
++                              Qt::AlignLeft | Qt::AlignVCenter,
++                              smallFm.elidedText(meta, Qt::ElideRight, textRight - left));
++            if (showAgo) {
++                const qreal x = right - agoWidth;
++                const QRectF line(x, cell.top(), agoWidth, cell.height());
++                painter->drawText(line, Qt::AlignLeft | Qt::AlignVCenter, changed);
++                painter->setFont(agoBold);
++                painter->setPen(fg);
++                painter->drawText(line, Qt::AlignRight | Qt::AlignVCenter, ago);
++            }
++        }
++        painter->restore();
++    }
++
++private:
++    KDirOperator *m_op;
++    int m_style;
++};
++}
++
++
++// kio-ng: the quick preview --------------------------------------------------------------------------------------------
++namespace
++{
++// a large picture of a file, beside the pointer; not a window one can click or focus
++class NgQuickView : public QWidget
++{
++public:
++    NgQuickView(const QPixmap &pixmap, const QString &caption, QWidget *parent)
++        : QWidget(parent)
++        , m_pixmap(pixmap)
++        , m_caption(caption)
++    {
++        setAttribute(Qt::WA_TransparentForMouseEvents);
++        const QSizeF image = QSizeF(pixmap.size()) / pixmap.devicePixelRatio();
++        resize(int(image.width()) + 20, int(image.height()) + 20 + fontMetrics().height() + 6);
++    }
++
++protected:
++    void paintEvent(QPaintEvent *) override
++    {
++        QPainter painter(this);
++        painter.setRenderHint(QPainter::Antialiasing);
++        const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
++        const bool dark = palette().color(QPalette::Window).lightnessF() < 0.5;
++        painter.setPen(QPen(dark ? QColor(255, 255, 255, 40) : QColor(0, 0, 0, 40), 1));
++        painter.setBrush(palette().color(QPalette::Window));
++        painter.drawRoundedRect(frame, 12, 12);
++        const QSizeF image = QSizeF(m_pixmap.size()) / m_pixmap.devicePixelRatio();
++        const QRectF target(10, 10, image.width(), image.height());
++        QPainterPath clip;
++        clip.addRoundedRect(target, 7, 7);
++        painter.save();
++        painter.setClipPath(clip);
++        painter.drawPixmap(target.topLeft(), m_pixmap);
++        painter.restore();
++        painter.setPen(palette().color(QPalette::WindowText));
++        painter.drawText(QRectF(12, target.bottom() + 3, width() - 24, fontMetrics().height() + 4), Qt::AlignLeft | Qt::AlignVCenter,
++                         fontMetrics().elidedText(m_caption, Qt::ElideMiddle, width() - 24));
++    }
++
++private:
++    QPixmap m_pixmap;
++    QString m_caption;
++};
++}
++
++void KDirOperatorDetailView::ngHoverAt(const QPoint &pos)
++{
++    const QModelIndex index = indexAt(pos);
++    const QModelIndex row = index.isValid() ? index.sibling(index.row(), 0) : QModelIndex();
++    if (row == m_ngHoverIndex) {
++        m_ngHoverPos = pos;
++        return;
++    }
++    ngHideQuickView();
++    m_ngHoverIndex = row;
++    m_ngHoverPos = pos;
++    const KFileItem item = row.data(KDirModel::FileItemRole).value<KFileItem>();
++    const QVariant quick = m_dirOperator->property("_ng_quick");
++    if (row.isValid() && !item.isNull() && !item.isDir() && (!quick.isValid() || quick.toBool())) {
++        m_ngHoverTimer.setInterval(qBound(0, m_dirOperator->property("_ng_quick_delay").toInt(), 3000)); // 0: at once
++        m_ngHoverTimer.start();
++    }
++}
++
++void KDirOperatorDetailView::ngHideQuickView()
++{
++    m_ngHoverTimer.stop();
++    ++m_ngPreviewSerial; // a preview on its way is not wanted any more
++    if (m_ngQuickView) {
++        m_ngQuickView->deleteLater();
++        m_ngQuickView = nullptr;
++    }
++}
++
++void KDirOperatorDetailView::ngShowQuickView(const QPixmap &pixmap)
++{
++    const KFileItem item = m_ngHoverIndex.data(KDirModel::FileItemRole).value<KFileItem>();
++    // a layer over the dialog (not a window of its own: those are placed unreliably on Wayland), beside the pointer on
++    // the side with room, inside the dialog; the picture is made smaller if the dialog is
++    QWidget *host = window();
++    QPixmap picture = pixmap;
++    const QSize room = host->size() - QSize(60, 80 + fontMetrics().height());
++    const QSizeF logical = QSizeF(picture.size()) / picture.devicePixelRatio();
++    if (logical.width() > room.width() || logical.height() > room.height()) {
++        const qreal dpr = picture.devicePixelRatio();
++        picture = picture.scaled((QSizeF(room) * dpr).toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
++        picture.setDevicePixelRatio(dpr);
++    }
++    auto *view = new NgQuickView(picture, item.text() + QStringLiteral(" · ") + KIO::convertSize(item.size()), host);
++    m_ngQuickView = view;
++    const QPoint pointer = viewport()->mapTo(host, m_ngHoverPos);
++    QPoint at(pointer.x() + 28, pointer.y() - view->height() / 2);
++    if (at.x() + view->width() > host->width() - 8) {
++        at.setX(pointer.x() - 28 - view->width());
++    }
++    at.setX(qBound(8, at.x(), qMax(8, host->width() - view->width() - 8)));
++    at.setY(qBound(8, at.y(), qMax(8, host->height() - view->height() - 8)));
++    view->move(at);
++    view->raise();
++    view->show();
++}
++
++bool KDirOperatorDetailView::viewportEvent(QEvent *event)
++{
++    if (m_ngStyle != 0) {
++        switch (event->type()) {
++        case QEvent::HoverMove:
++        case QEvent::HoverEnter:
++            ngHoverAt(static_cast<QHoverEvent *>(event)->position().toPoint());
++            break;
++        case QEvent::HoverLeave:
++        case QEvent::Leave:
++        case QEvent::MouseButtonPress:
++        case QEvent::Wheel:
++            ngHideQuickView();
++            m_ngHoverIndex = QModelIndex();
++            break;
++        default:
++            break;
++        }
++    }
++    return QTreeView::viewportEvent(event);
++}
++
++void KDirOperatorDetailView::keyPressEvent(QKeyEvent *event)
++{
++    ngHideQuickView();
++    QTreeView::keyPressEvent(event);
++}
++
++void KDirOperatorDetailView::scrollContentsBy(int dx, int dy)
++{
++    if (m_ngStyle != 0) {
++        ngHideQuickView();
++        m_ngHoverIndex = QModelIndex();
++    }
++    QTreeView::scrollContentsBy(dx, dy);
++}
++
++void KDirOperatorDetailView::ngZoomBy(int steps)
++{
++    // the size of the rows: 80 % to 180 %, kept for every dialog
++    const qreal now = m_dirOperator->property("_ng_scale").toReal() > 0 ? m_dirOperator->property("_ng_scale").toReal() : 1.0;
++    const qreal scale = qBound(0.8, now + 0.15 * steps, 1.85);
++    if (qFuzzyCompare(scale, now)) {
++        return;
++    }
++    m_dirOperator->setProperty("_ng_scale", scale);
++    KConfigGroup ng(KSharedConfig::openConfig(QStringLiteral("dialog-ngrc")), QStringLiteral("View"));
++    ng.writeEntry("RowScale", scale);
++    ng.sync();
++    doItemsLayout();
++    viewport()->update();
++}
++
++void KDirOperatorDetailView::setNgStyle(int style)
++{
++    m_ngStyle = style;
++    if (style == 0) {
++        return;
++    }
++    // the quick preview: when the pointer has rested on a file for a moment
++    m_ngHoverTimer.setSingleShot(true);
++    m_ngHoverTimer.setInterval(650);
++    connect(&m_ngHoverTimer, &QTimer::timeout, this, [this] {
++        const KFileItem item = m_ngHoverIndex.data(KDirModel::FileItemRole).value<KFileItem>();
++        if (item.isNull()) {
++            return;
++        }
++        const int serial = ++m_ngPreviewSerial;
++        // the plugins the user enabled (the same as the preview generator), kept alive for the job; one of the sizes
++        // of the thumbnail cache
++        static const QStringList plugins = KConfigGroup(KSharedConfig::openConfig(QStringLiteral("dolphinrc")), QStringLiteral("PreviewSettings"))
++                                               .readEntry("Plugins", KIO::PreviewJob::defaultPlugins());
++        // small, medium or large (the cache keeps up to 1024 pixels, the scale of the screen included)
++        const QString size = m_dirOperator->property("_ng_quick_size").toString();
++        const int side = size == QLatin1String("small") ? 240 : size == QLatin1String("large") ? 640 : 400;
++        auto *job = KIO::filePreview(KFileItemList{item}, QSize(side, side), &plugins);
++        job->setDevicePixelRatio(qApp->devicePixelRatio());
++        job->setScaleType(KIO::PreviewJob::ScaledAndCached);
++        connect(job, &KIO::PreviewJob::gotPreview, this, [this, serial](const KFileItem &, const QPixmap &pixmap) {
++            if (serial == m_ngPreviewSerial && (underMouse() || qEnvironmentVariableIsSet("DIALOG_NG_DEMO_QUICKVIEW")) && !pixmap.isNull()) {
++                ngShowQuickView(pixmap);
++            }
++        });
++    });
++    setMouseTracking(true);
++    viewport()->setAttribute(Qt::WA_Hover);
++    // for screenshots: DIALOG_NG_DEMO_QUICKVIEW names a file whose quick preview opens as if the pointer rested on it
++    if (const QString demo = qEnvironmentVariable("DIALOG_NG_DEMO_QUICKVIEW"); !demo.isEmpty()) {
++        QTimer::singleShot(2500, this, [this, demo] {
++            for (int row = 0; model() && row < model()->rowCount(); ++row) {
++                const QModelIndex index = model()->index(row, 0);
++                if (index.data(KDirModel::FileItemRole).value<KFileItem>().text() == demo) {
++                    m_ngHoverIndex = index;
++                    m_ngHoverPos = visualRect(index).center();
++                    m_ngHoverTimer.start();
++                    break;
++                }
++            }
++        });
++    }
++    setUniformRowHeights(false);
++    setAlternatingRowColors(false);
++    setRootIsDecorated(false);
++    setItemsExpandable(false);
++    setIndentation(0);
++    setFrameShape(QFrame::NoFrame);
++    header()->hide();
++    for (int column = 1; column < header()->count(); ++column) {
++        setColumnHidden(column, true);
++    }
++    setItemDelegate(new NgRowDelegate(m_dirOperator, style, this));
++}
++
++void KDirOperatorDetailView::drawRow(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
++{
++    if (m_ngStyle == 0) {
++        QTreeView::drawRow(painter, option, index);
++        return;
++    }
++    // the whole row is one tile, drawn by the delegate (no row background of the style, no columns)
++    QStyleOptionViewItem opt = option;
++    opt.rect = QRect(0, option.rect.top(), viewport()->width(), option.rect.height());
++    opt.state &= ~(QStyle::State_Selected | QStyle::State_MouseOver | QStyle::State_HasFocus);
++    if (selectionModel() && selectionModel()->isSelected(index.sibling(index.row(), 0))) {
++        opt.state |= QStyle::State_Selected;
++    }
++    const QPoint cursor = viewport()->mapFromGlobal(QCursor::pos());
++    if (viewport()->underMouse() && opt.rect.contains(cursor)) {
++        opt.state |= QStyle::State_MouseOver;
++    }
++    itemDelegate()->paint(painter, opt, index.sibling(index.row(), 0));
++}
++
+ #include "moc_kdiroperatordetailview_p.cpp"
+diff --git a/src/filewidgets/kdiroperatordetailview_p.h b/src/filewidgets/kdiroperatordetailview_p.h
+index d26ec19..9c0a06a 100644
+--- a/src/filewidgets/kdiroperatordetailview_p.h
++++ b/src/filewidgets/kdiroperatordetailview_p.h
+@@ -8,6 +8,9 @@
+ #define KDIROPERATORDETAILVIEW_P_H
+ 
+ #include <KDirOperator>
++#include <QPersistentModelIndex>
++#include <QPointer>
++#include <QTimer>
+ #include <QTreeView>
+ 
+ #include <kfile.h>
+@@ -32,6 +35,19 @@ public:
+      */
+     virtual bool setViewMode(KFile::FileView viewMode);
+ 
++    /*!
++     * kio-ng: the rows of Dialog NG instead of columns: 1 = two lines (a tile with the kind of file, name, type and
++     * size, how long ago it changed), 2 = compact (one line), 0 = KDE's columns. Groups (titles between the rows,
++     * following the sort order) are switched by the "_ng_groups" property of the dir operator.
++     */
++    void setNgStyle(int style);
++    int ngStyle() const
++    {
++        return m_ngStyle;
++    }
++    /*! kio-ng: the NG rows a step larger (positive) or smaller; kept in dialog-ngrc. */
++    void ngZoomBy(int steps);
++
+ protected:
+     void initViewItemOption(QStyleOptionViewItem *option) const override;
+ 
+@@ -41,11 +57,25 @@ protected:
+     void mouseMoveEvent(QMouseEvent *event) override;
+     void mouseReleaseEvent(QMouseEvent *event) override;
+     void currentChanged(const QModelIndex &current, const QModelIndex &previous) override;
++    void drawRow(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override;
++    bool viewportEvent(QEvent *event) override; // kio-ng: the quick preview while the pointer rests on a row
++    void keyPressEvent(QKeyEvent *event) override;
++    void scrollContentsBy(int dx, int dy) override;
+ 
+ private:
+     bool m_hideDetailColumns;
+     bool m_isEmblemClicked;
+     KDirOperator *m_dirOperator;
++    int m_ngStyle = 0;
++    // kio-ng: the quick preview: a large picture of the file the pointer rests on
++    void ngHoverAt(const QPoint &pos);
++    void ngHideQuickView();
++    void ngShowQuickView(const QPixmap &pixmap);
++    QTimer m_ngHoverTimer;
++    QPersistentModelIndex m_ngHoverIndex;
++    QPointer<QWidget> m_ngQuickView;
++    QPoint m_ngHoverPos;
++    int m_ngPreviewSerial = 0;
+ };
+ 
+ #endif
+diff --git a/src/filewidgets/kdirsortfilterproxymodel.cpp b/src/filewidgets/kdirsortfilterproxymodel.cpp
+index 3e033cf..32c7cbe 100644
+--- a/src/filewidgets/kdirsortfilterproxymodel.cpp
++++ b/src/filewidgets/kdirsortfilterproxymodel.cpp
+@@ -19,6 +19,37 @@
+ #include <kfileitem.h>
+ 
+ #include <QCollator>
++#include <QElapsedTimer>
++#include <QFile>
++#include <QHash>
++#include <sys/xattr.h>
++
++namespace
++{
++// kio-ng: pinned in Dolphin NG (the extended attribute user.ng.pinned), read again after a few seconds
++bool ngIsPinned(const KFileItem &item)
++{
++    static QHash<QString, std::pair<bool, qint64>> cache;
++    static QElapsedTimer clock;
++    if (!clock.isValid()) {
++        clock.start();
++    }
++    const QString path = item.localPath();
++    if (path.isEmpty()) {
++        return false;
++    }
++    auto it = cache.find(path);
++    if (it != cache.end() && clock.elapsed() - it->second < 5000) {
++        return it->first;
++    }
++    const bool pinned = ::getxattr(QFile::encodeName(path).constData(), "user.ng.pinned", nullptr, 0) >= 0;
++    if (cache.size() > 5000) {
++        cache.clear();
++    }
++    cache.insert(path, {pinned, clock.elapsed()});
++    return pinned;
++}
++}
+ 
+ class Q_DECL_HIDDEN KDirSortFilterProxyModel::KDirSortFilterProxyModelPrivate
+ {
+@@ -159,6 +190,15 @@ bool KDirSortFilterProxyModel::subSortLessThan(const QModelIndex &left, const QM
+ 
+     const bool isLessThan = (sortOrder() == Qt::AscendingOrder);
+ 
++    // kio-ng: items pinned in Dolphin NG come first, whatever the order
++    if (property("_ng_pinned_first").toBool()) {
++        const bool leftPinned = ngIsPinned(leftFileItem);
++        const bool rightPinned = ngIsPinned(rightFileItem);
++        if (leftPinned != rightPinned) {
++            return leftPinned ? isLessThan : !isLessThan;
++        }
++    }
++
+     // Show hidden files and folders last
+     if (d->m_sortHiddenFilesLast) {
+         const bool leftItemIsHidden = leftFileItem.isHidden();
+@@ -244,6 +284,15 @@ bool KDirSortFilterProxyModel::subSortLessThan(const QModelIndex &left, const QM
+     }
+ 
+     case KDirModel::ModifiedTime: {
++        // kio-ng: "by date" can be the date of creation
++        if (property("_ng_created").toBool()) {
++            const auto leftCreated = leftFileItem.entry().numberValue(KIO::UDSEntry::UDS_CREATION_TIME);
++            const auto rightCreated = rightFileItem.entry().numberValue(KIO::UDSEntry::UDS_CREATION_TIME);
++            if (leftCreated != rightCreated) {
++                return leftCreated < rightCreated;
++            }
++            return d->compare(leftFileItem.text(), rightFileItem.text(), sortCaseSensitivity()) < 0;
++        }
+         const auto leftModifiedTime = leftFileItem.entry().numberValue(KIO::UDSEntry::UDS_MODIFICATION_TIME);
+         const auto rightModifiedTime = rightFileItem.entry().numberValue(KIO::UDSEntry::UDS_MODIFICATION_TIME);
+ 
 diff --git a/src/filewidgets/kfileplacesview.cpp b/src/filewidgets/kfileplacesview.cpp
-index dc8f0f3..e174d17 100644
+index dc8f0f3..3c24bff 100644
 --- a/src/filewidgets/kfileplacesview.cpp
 +++ b/src/filewidgets/kfileplacesview.cpp
 @@ -90,7 +90,13 @@ QSize KFilePlacesViewDelegate::sizeHint(const QStyleOptionViewItem &option, cons
@@ -41,7 +1336,35 @@ index dc8f0f3..e174d17 100644
                   opt.rect.top() + (opt.rect.height() - m_iconSize) / 2);
      painter->drawPixmap(point, pm);
  
-@@ -1830,7 +1839,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
+@@ -692,6 +701,27 @@ void KFilePlacesViewDelegate::drawSectionHeader(QPainter *painter, const QStyleO
+     const QColor c2 = baseColor(option);
+     QColor penColor = mixedColor(c1, c2, 60);
+ 
++    if (m_view->property("ngPills").toBool()) {
++        // kio-ng: Dialog NG draws the section titles as small pills, as Dolphin NG does
++        QFont pillFont = option.font;
++        pillFont.setPointSizeF(pillFont.pointSizeF() * 0.84);
++        pillFont.setWeight(QFont::DemiBold);
++        const QFontMetrics pillFm(pillFont);
++        const QString text = pillFm.elidedText(category, Qt::ElideRight, textRect.width() - 20);
++        const QRectF pill(textRect.left() - 4, textRect.bottom() - pillFm.height() - 3, pillFm.horizontalAdvance(text) + 18, pillFm.height() + 4);
++        QColor ink = c1;
++        ink.setAlphaF(0.12);
++        painter->setRenderHint(QPainter::Antialiasing);
++        painter->setPen(Qt::NoPen);
++        painter->setBrush(ink);
++        painter->drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
++        ink.setAlphaF(0.85);
++        painter->setFont(pillFont);
++        painter->setPen(ink);
++        painter->drawText(pill, Qt::AlignCenter, text);
++        painter->restore();
++        return;
++    }
+     painter->setPen(penColor);
+     painter->drawText(textRect, Qt::AlignLeft | Qt::AlignBottom, option.fontMetrics.elidedText(category, Qt::ElideRight, textRect.width()));
+     painter->restore();
+@@ -1830,7 +1860,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
          return; // We've nothing to display anyway
      }
  
@@ -51,7 +1374,7 @@ index dc8f0f3..e174d17 100644
      const int maxSize = 64;
      QFontMetrics fm = q->fontMetrics();
  
-@@ -1889,6 +1899,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
+@@ -1889,6 +1920,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
          size = minSize;
      } else if (size > maxSize) {
          size = maxSize;
@@ -61,10 +1384,27 @@ index dc8f0f3..e174d17 100644
          // Make it a multiple of 16
          size &= ~0xf;
 diff --git a/src/filewidgets/kfilewidget.cpp b/src/filewidgets/kfilewidget.cpp
-index 86abbf2..5fd1ec1 100644
+index 86abbf2..141e769 100644
 --- a/src/filewidgets/kfilewidget.cpp
 +++ b/src/filewidgets/kfilewidget.cpp
-@@ -72,6 +72,8 @@
+@@ -64,6 +64,16 @@
+ #include <QLayout>
+ #include <QLineEdit>
+ #include <QLoggingCategory>
++#include "kdirsortfilterproxymodel.h"
++#include <QActionGroup>
++#include <QMouseEvent>
++#include <QStorageInfo>
++#include <QPainterPath>
++#include <QPainter>
++#include <QDialog>
++#include <QAbstractButton>
++#include <KWindowEffects>
++#include <functional>
+ #include <QMenu>
+ #include <QMimeDatabase>
+ #include <QPushButton>
+@@ -72,6 +82,8 @@
  #include <QStandardPaths>
  #include <QTimer>
  #include <QToolBar>
@@ -73,49 +1413,388 @@ index 86abbf2..5fd1ec1 100644
  
  #include <algorithm>
  #include <array>
-@@ -224,6 +226,14 @@ public:
+@@ -80,6 +92,244 @@
+ Q_DECLARE_LOGGING_CATEGORY(KIO_KFILEWIDGETS_FW)
+ Q_LOGGING_CATEGORY(KIO_KFILEWIDGETS_FW, "kf.kio.kfilewidgets.kfilewidget", QtInfoMsg)
+ 
++// kio-ng: the pieces of Dialog NG's sidebar ------------------------------------------------------------------------
++namespace
++{
++bool ngDark(const QWidget *widget)
++{
++    return widget->palette().color(QPalette::Window).lightnessF() < 0.5;
++}
++
++// the card the sidebar sits on: glass over the compositor's blur (the window is see-through there), or, without a
++// compositor that blurs, a tinted panel
++class NgSideCard : public QWidget
++{
++public:
++    using QWidget::QWidget;
++    bool glass = false;
++    std::function<void()> geometryChanged;
++
++    QRectF cardRect() const
++    {
++        return QRectF(rect()).adjusted(6, 4, -4, -6);
++    }
++
++protected:
++    void paintEvent(QPaintEvent *) override
++    {
++        QPainter painter(this);
++        painter.setRenderHint(QPainter::Antialiasing);
++        const QRectF card = cardRect();
++        const bool dark = ngDark(this);
++        QPainterPath path;
++        path.addRoundedRect(card, 14, 14);
++        QColor window = palette().color(QPalette::Window);
++        if (glass) {
++            // replaces the window colour painted under it: what shows is the blurred desktop, tinted
++            window.setAlphaF(dark ? 0.40 : 0.48);
++            painter.setCompositionMode(QPainter::CompositionMode_Source);
++            painter.fillPath(path, window);
++            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
++        } else {
++            const QColor accent = palette().color(QPalette::Highlight);
++            QLinearGradient gradient(card.topLeft(), card.bottomRight());
++            gradient.setColorAt(0, QColor::fromRgbF(window.redF() * 0.8 + accent.redF() * 0.2, window.greenF() * 0.8 + accent.greenF() * 0.2,
++                                                    window.blueF() * 0.8 + accent.blueF() * 0.2));
++            gradient.setColorAt(1, dark ? window.darker(115) : window.darker(104));
++            painter.fillPath(path, gradient);
++        }
++        painter.setPen(QPen(dark ? QColor(255, 255, 255, 40) : QColor(0, 0, 0, 30), 1));
++        painter.drawRoundedRect(card.adjusted(0.5, 0.5, -0.5, -0.5), 13.5, 13.5);
++    }
++    void resizeEvent(QResizeEvent *event) override
++    {
++        QWidget::resizeEvent(event);
++        if (geometryChanged) {
++            geometryChanged();
++        }
++    }
++    void moveEvent(QMoveEvent *event) override
++    {
++        QWidget::moveEvent(event);
++        if (geometryChanged) {
++            geometryChanged();
++        }
++    }
++};
++
++// a section title: a small pill, as in Dolphin NG
++class NgPill : public QWidget
++{
++public:
++    NgPill(const QString &text, QWidget *parent)
++        : QWidget(parent)
++        , m_text(text)
++    {
++        QFont f = font();
++        f.setPointSizeF(f.pointSizeF() * 0.84);
++        f.setWeight(QFont::DemiBold);
++        setFont(f);
++        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
++    }
++    QSize sizeHint() const override
++    {
++        const QFontMetrics fm(font());
++        return QSize(fm.horizontalAdvance(m_text) + 22, fm.height() + 12);
++    }
++
++protected:
++    void paintEvent(QPaintEvent *) override
++    {
++        QPainter painter(this);
++        painter.setRenderHint(QPainter::Antialiasing);
++        const QFontMetrics fm(font());
++        const QRectF pill(2, 6, fm.horizontalAdvance(m_text) + 18, fm.height() + 4);
++        QColor ink = palette().color(QPalette::WindowText);
++        ink.setAlphaF(0.12);
++        painter.setPen(Qt::NoPen);
++        painter.setBrush(ink);
++        painter.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
++        ink.setAlphaF(0.85);
++        painter.setPen(ink);
++        painter.drawText(pill, Qt::AlignCenter, m_text);
++    }
++
++private:
++    QString m_text;
++};
++
++// a row of the sidebar's own sections (pinned items, filters): icon, label, a number on the right
++class NgSideRow : public QAbstractButton
++{
++public:
++    NgSideRow(const QIcon &icon, const QString &text, const QString &count, QWidget *parent)
++        : QAbstractButton(parent)
++        , m_count(count)
++    {
++        setIcon(icon);
++        setText(text);
++        setToolTip(text);
++        setCursor(Qt::PointingHandCursor);
++        setAttribute(Qt::WA_Hover);
++        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
++    }
++    QSize sizeHint() const override
++    {
++        return QSize(120, qMax(30, fontMetrics().height() + 12));
++    }
++
++protected:
++    void paintEvent(QPaintEvent *) override
++    {
++        QPainter painter(this);
++        painter.setRenderHint(QPainter::Antialiasing);
++        QColor ink = palette().color(QPalette::WindowText);
++        const QRectF row = QRectF(rect()).adjusted(2, 1, -2, -1);
++        if (isChecked() || underMouse()) {
++            QColor ground = ink;
++            ground.setAlphaF(isChecked() ? 0.14 : 0.07);
++            painter.setPen(Qt::NoPen);
++            painter.setBrush(ground);
++            painter.drawRoundedRect(row, row.height() / 2, row.height() / 2);
++        }
++        const int iconSize = 18;
++        icon().paint(&painter, QRect(int(row.left()) + 10, int(row.center().y()) - iconSize / 2, iconSize, iconSize));
++        QColor dim = ink;
++        dim.setAlphaF(0.6);
++        const QFontMetrics fm(font());
++        const int countWidth = m_count.isEmpty() ? 0 : fm.horizontalAdvance(m_count) + 10;
++        // KDE's accelerator manager adds "&" marks to the buttons of a dialog: drawn by hand, they would show
++        const QString label = KLocalizedString::removeAcceleratorMarker(text());
++        painter.setPen(ink);
++        painter.drawText(QRectF(row.left() + 38, row.top(), row.width() - 48 - countWidth, row.height()), Qt::AlignLeft | Qt::AlignVCenter,
++                         fm.elidedText(label, Qt::ElideMiddle, int(row.width() - 48 - countWidth)));
++        if (!m_count.isEmpty()) {
++            painter.setPen(dim);
++            painter.drawText(QRectF(row.right() - countWidth - 4, row.top(), countWidth, row.height()), Qt::AlignRight | Qt::AlignVCenter, m_count);
++        }
++    }
++
++private:
++    QString m_count;
++};
++
++// how full the disk of the home folder is; a click opens its root
++class NgDiskBox : public QWidget
++{
++public:
++    explicit NgDiskBox(QWidget *parent)
++        : QWidget(parent)
++    {
++        setCursor(Qt::PointingHandCursor);
++        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
++    }
++    std::function<void(const QString &)> opened;
++    QSize sizeHint() const override
++    {
++        return QSize(120, fontMetrics().height() + 30);
++    }
++
++protected:
++    void paintEvent(QPaintEvent *) override
++    {
++        const QStorageInfo storage(QDir::homePath());
++        if (!storage.isValid() || storage.bytesTotal() <= 0) {
++            return;
++        }
++        QPainter painter(this);
++        painter.setRenderHint(QPainter::Antialiasing);
++        const bool dark = ngDark(this);
++        const QRectF box = QRectF(rect()).adjusted(2, 2, -2, -2);
++        painter.setPen(Qt::NoPen);
++        painter.setBrush(dark ? QColor(0, 0, 0, 62) : QColor(255, 255, 255, 130));
++        painter.drawRoundedRect(box, 10, 10);
++        QFont small = font();
++        small.setPointSizeF(small.pointSizeF() * 0.86);
++        painter.setFont(small);
++        painter.setPen(palette().color(QPalette::WindowText));
++        const QRectF text = box.adjusted(10, 6, -10, -18);
++        const QString total = KIO::convertSize(storage.bytesTotal());
++        const QString free = i18nc("@info:status Free disk space", "%1 free", KIO::convertSize(storage.bytesAvailable()));
++        const QFontMetrics fm(small);
++        const bool both = fm.horizontalAdvance(total) + fm.horizontalAdvance(free) + 12 <= text.width();
++        if (both) {
++            painter.drawText(text, Qt::AlignLeft | Qt::AlignVCenter, total);
++        }
++        painter.drawText(text, (both ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter, fm.elidedText(free, Qt::ElideRight, int(text.width())));
++        const qreal used = 1.0 - qreal(storage.bytesAvailable()) / qreal(storage.bytesTotal());
++        const QRectF groove(box.left() + 10, box.bottom() - 14, box.width() - 20, 6);
++        painter.setPen(Qt::NoPen);
++        painter.setBrush(dark ? QColor(255, 255, 255, 44) : QColor(0, 0, 0, 36));
++        painter.drawRoundedRect(groove, 3, 3);
++        painter.setBrush(used > 0.9 ? QColor(224, 145, 79) : palette().color(QPalette::Highlight));
++        painter.drawRoundedRect(QRectF(groove.topLeft(), QSizeF(qMax(6.0, groove.width() * used), groove.height())), 3, 3);
++    }
++    void mouseReleaseEvent(QMouseEvent *event) override
++    {
++        if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint()) && opened) {
++            opened(QStorageInfo(QDir::homePath()).rootPath());
++        }
++    }
++};
++
++// paints the window colour on a see-through window (all of it but the glass, which the card paints itself)
++class NgWindowGround : public QObject
++{
++public:
++    using QObject::QObject;
++    bool eventFilter(QObject *watched, QEvent *event) override
++    {
++        if (event->type() == QEvent::Paint) {
++            auto *window = static_cast<QWidget *>(watched);
++            QPainter painter(window);
++            painter.setCompositionMode(QPainter::CompositionMode_Source);
++            painter.fillRect(static_cast<QPaintEvent *>(event)->rect(), window->palette().color(QPalette::Window));
++        }
++        return false;
++    }
++};
++}
++
+ class KFileWidgetPrivate
+ {
+ public:
+@@ -224,6 +474,40 @@ public:
      QWidget *m_opsWidget = nullptr;
      QVBoxLayout *m_opsWidgetLayout = nullptr;
  
 +    // kio-ng: quick filters by kind of file, as a row of chips above the files and as a section under the places
 +    void ngInitFilters();
++    // kio-ng: the bar of Dialog NG: sort, view, filters, groups (buttons with menus, the choice in their label)
++    QWidget *ngBar(QWidget *parent);
++    void ngUpdateBar();
++    void ngSetView(const QString &mode);
++    void ngSetGroups(int by);
++    void ngCountKinds();
++    QWidget *m_ngNavWidget = nullptr;
++    QToolButton *m_ngSortButton = nullptr;
++    QToolButton *m_ngViewButton = nullptr;
++    QToolButton *m_ngFiltersButton = nullptr;
++    QToolButton *m_ngGroupsButton = nullptr;
++    QList<int> m_ngKindCounts; // per kind; [0] = everything listed
++    // the sidebar: a card (glass over the blur of the desktop), the places, the pinned items, the filters, the disk
++    QWidget *ngSidebar(QWidget *parent);
++    void ngFillSide();
++    void ngUpdateBlur();
++    NgSideCard *m_ngCard = nullptr;
++    QWidget *m_ngSideFilters = nullptr;
++    QWidget *m_ngGlassWindow = nullptr; // the window made see-through for the glass
++    QWidget *m_ngChips = nullptr; // the kinds present as chips, when the bar has room for them
++    QHBoxLayout *m_ngBarRow = nullptr; // the row of the buttons (the chips go at its end when there is room)
++    QHBoxLayout *m_ngChipsRow = nullptr; // a row of their own below, when not
++    void ngFillChips();
++    void ngFitBar();
++    void ngSetSortCreated(bool created);
 +    void ngSetFilter(int kind);
 +    QWidget *ngFilterButtons(QWidget *parent, bool vertical);
 +    QWidget *m_ngFilterBar = nullptr;
++    QString m_ngView; // kio-ng: rows | compact | details | icons (dialog-ngrc, shared by every application)
 +    QList<QToolButton *> m_ngFilterButtons;
 +    int m_ngFilter = 0;
 +
      QLabel *m_filterLabel = nullptr;
      KUrlNavigator *m_urlNavigator = nullptr;
      KMessageWidget *m_messageWidget = nullptr;
-@@ -1149,6 +1159,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
-     m_opsWidgetLayout->addWidget(navWidget);
+@@ -358,6 +642,18 @@ KFileWidget::KFileWidget(const QUrl &_startDir, QWidget *parent)
+     : QWidget(parent)
+     , d(new KFileWidgetPrivate(this))
+ {
++    // kio-ng: the glass sidebar needs a see-through window, which has to be asked for before the window exists;
++    // only with a compositor that blurs, and only for the dialog this widget is in (never another application window)
++    {
++        QWidget *top = window();
++        const KConfigGroup ng(KSharedConfig::openConfig(QStringLiteral("dialog-ngrc")), QStringLiteral("Sidebar"));
++        if (top != this && qobject_cast<QDialog *>(top) && !top->testAttribute(Qt::WA_WState_Created) && ng.readEntry("Glass", true)
++            && KWindowEffects::isEffectAvailable(KWindowEffects::BlurBehind)) {
++            top->setAttribute(Qt::WA_TranslucentBackground);
++            top->installEventFilter(new NgWindowGround(this));
++            d->m_ngGlassWindow = top;
++        }
++    }
+     QUrl startDir(_startDir);
+     // qDebug() << "startDir" << startDir;
+     QString filename;
+@@ -1087,10 +1383,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
+     const auto navWidget = new QWidget(m_opsWidget);
+     const auto navLayout = new QHBoxLayout(navWidget);
+     navLayout->addWidget(m_urlNavigator);
+-    navLayout->setContentsMargins(q->style()->pixelMetric(QStyle::PM_LayoutLeftMargin),
+-                                  0,
+-                                  q->style()->pixelMetric(QStyle::PM_LayoutRightMargin),
+-                                  q->style()->pixelMetric(QStyle::PM_LayoutBottomMargin));
++    navLayout->setContentsMargins(6, 0, 6, 0); // kio-ng: in the toolbar, between "up" and "new folder"
++    m_ngNavWidget = navWidget;
+ 
+     m_messageWidget = new KMessageWidget(q);
+     m_messageWidget->setMessageType(KMessageWidget::Error);
+@@ -1146,9 +1440,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
+     initToolbar();
+ 
+     m_opsWidgetLayout->addWidget(m_toolbar);
+-    m_opsWidgetLayout->addWidget(navWidget);
      m_opsWidgetLayout->addWidget(m_messageWidget);
++    topSeparator->hide(); // kio-ng: the bar below the toolbar is the divide
      m_opsWidgetLayout->addWidget(topSeparator);
-+    m_ngFilterBar = ngFilterButtons(m_opsWidget, false); // kio-ng
++    m_ngFilterBar = ngBar(m_opsWidget); // kio-ng: sort, view, filters, groups
 +    m_opsWidgetLayout->addWidget(m_ngFilterBar);
      m_opsWidgetLayout->addWidget(m_ops);
      m_opsWidgetLayout->addWidget(bottomSparator);
  }
-@@ -1503,7 +1515,16 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1277,29 +1573,20 @@ void KFileWidgetPrivate::initToolbar()
+     });
+     m_bookmarkButton->setMenu(m_bookmarkHandler->menu());
+ 
+-    QWidget *midSpacer = new QWidget(q);
+-    midSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+-
++    // kio-ng: one row: back, forward, up, the path (breadcrumbs) across, a new folder and the options; sorting, views
++    // and filters are the bar below (ngBar), reloading and the bookmarks are in the options
+     m_toolbar->addAction(m_ops->action(KDirOperator::Back));
+     m_toolbar->addAction(m_ops->action(KDirOperator::Forward));
+     m_toolbar->addAction(m_ops->action(KDirOperator::Up));
+-    m_toolbar->addAction(m_ops->action(KDirOperator::Reload));
+-    m_toolbar->addSeparator();
+-    m_toolbar->addAction(m_ops->action(KDirOperator::ViewIconsView));
+-    m_toolbar->addAction(m_ops->action(KDirOperator::ViewCompactView));
+-    m_toolbar->addAction(m_ops->action(KDirOperator::ViewDetailsView));
+-    m_toolbar->addSeparator();
+-    m_toolbar->addAction(m_ops->action(KDirOperator::ShowPreview));
+-    m_toolbar->addAction(m_ops->action(KDirOperator::SortMenu));
+-    m_toolbar->addAction(m_bookmarkButton);
+-
+-    m_toolbar->addWidget(midSpacer);
+-
+-    initZoomWidget();
+-    m_toolbar->addAction(m_zoomOutAction);
+-    m_toolbar->addWidget(m_iconSizeSlider);
+-    m_toolbar->addAction(m_zoomInAction);
+-    m_toolbar->addSeparator();
++    m_ngNavWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
++    m_toolbar->addWidget(m_ngNavWidget);
++
++    initZoomWidget(); // the zoom stays in the View menu
++    m_iconSizeSlider->hide();
++
++    menu->addSeparator();
++    menu->addAction(m_ops->action(KDirOperator::Reload));
++    menu->addAction(m_bookmarkButton);
+ 
+     m_toolbar->addAction(m_ops->action(KDirOperator::NewFolder));
+     m_toolbar->addAction(menu);
+@@ -1503,7 +1790,7 @@ void KFileWidgetPrivate::initPlacesPanel()
      // TODO: KDE5 ### REMOVE THIS when KDirOperator's initial URL (in the c'tor) is gone.
      m_placesView->setUrl(m_url);
  
 -    m_placesDock->setWidget(m_placesView);
-+    {
-+        // kio-ng: the quick filters again, as a section under the places
-+        auto *side = new QWidget(m_placesDock);
-+        auto *sideLayout = new QVBoxLayout(side);
-+        sideLayout->setContentsMargins(0, 0, 0, 0);
-+        sideLayout->setSpacing(0);
-+        sideLayout->addWidget(m_placesView, 1);
-+        sideLayout->addWidget(ngFilterButtons(side, true));
-+        m_placesDock->setWidget(side);
-+    }
++    m_placesDock->setWidget(ngSidebar(m_placesDock)); // kio-ng
      m_placesViewSplitter->insertWidget(0, m_placesDock);
  
      // initialize the size of the splitter
-@@ -1614,6 +1635,108 @@ void KFileWidgetPrivate::initGUI()
+@@ -1614,6 +1901,615 @@ void KFileWidgetPrivate::initGUI()
      updateTabOrder();
  }
  
@@ -202,6 +1881,8 @@ index 86abbf2..5fd1ec1 100644
 +    }
 +    if (m_ngFilter == 0) {
 +        slotFileFilterChanged(); // back to what the dialog's own filter says
++        ngUpdateBar();
++        ngFillChips();
 +        return;
 +    }
 +    // only this kind, and no folders: the lister keeps folders for a name filter, but not for a type
@@ -219,8 +1900,567 @@ index 86abbf2..5fd1ec1 100644
 +    m_ops->setMimeFilter(types);
 +    m_ops->setNameFilter(patterns);
 +    m_ops->updateDir();
++    ngUpdateBar();
++    ngFillChips();
 +}
++
++// kio-ng: the bar of Dialog NG -------------------------------------------------------------------------------------
++QWidget *KFileWidgetPrivate::ngBar(QWidget *parent)
++{
++    auto *bar = new QWidget(parent);
++    auto *rows = new QVBoxLayout(bar);
++    rows->setContentsMargins(8, 2, 8, 6);
++    rows->setSpacing(2);
++    auto *layout = new QHBoxLayout();
++    layout->setContentsMargins(0, 0, 0, 0);
++    layout->setSpacing(4);
++    rows->addLayout(layout);
++    m_ngChipsRow = new QHBoxLayout();
++    m_ngChipsRow->setContentsMargins(0, 0, 0, 0);
++    rows->addLayout(m_ngChipsRow);
++    m_ngBarRow = layout;
++    auto button = [&](const char *icon) {
++        auto *b = new QToolButton(bar);
++        b->setAutoRaise(true);
++        b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
++        b->setIcon(QIcon::fromTheme(QString::fromLatin1(icon)));
++        b->setPopupMode(QToolButton::InstantPopup);
++        b->setMenu(new QMenu(b));
++        layout->addWidget(b);
++        return b;
++    };
++    m_ngSortButton = button("view-sort");
++    m_ngViewButton = button("view-list-details");
++    m_ngFiltersButton = button("view-filter");
++    m_ngGroupsButton = button("view-group");
++    // the filters: the kinds present as chips when there is room, otherwise the button with its menu
++    layout->removeWidget(m_ngFiltersButton);
++    layout->addWidget(m_ngFiltersButton);
++    m_ngChips = new QWidget(bar);
++    auto *chipLayout = new QHBoxLayout(m_ngChips);
++    chipLayout->setContentsMargins(10, 0, 0, 0);
++    chipLayout->setSpacing(2);
++    layout->addWidget(m_ngChips);
++    layout->addStretch(1);
++    m_ngChipsRow->addStretch(1);
++    {
++        const QColor ink = bar->palette().color(QPalette::WindowText);
++        m_ngChips->setStyleSheet(QStringLiteral("QToolButton { border: none; border-radius: 12px; padding: 3px 10px; }"
++                                                "QToolButton:hover { background: rgba(%1, %2, %3, 0.08); }"
++                                                "QToolButton:checked { background: rgba(%1, %2, %3, 0.16); }")
++                                     .arg(ink.red())
++                                     .arg(ink.green())
++                                     .arg(ink.blue()));
++    }
++    struct Watcher : QObject {
++        std::function<void()> resized;
++        bool eventFilter(QObject *, QEvent *event) override
++        {
++            if (event->type() == QEvent::Resize) {
++                resized();
++            }
++            return false;
++        }
++    };
++    auto *watcher = new Watcher;
++    watcher->setParent(bar);
++    watcher->resized = [this] {
++        ngFitBar();
++    };
++    bar->installEventFilter(watcher);
++
++    // sort: KDirOperator's own actions
++    QObject::connect(m_ngSortButton->menu(), &QMenu::aboutToShow, q, [this] {
++        QMenu *menu = m_ngSortButton->menu();
++        menu->clear();
++        menu->addAction(m_ops->action(KDirOperator::SortByName));
++        menu->addAction(m_ops->action(KDirOperator::SortBySize));
++        // the date of change or of creation, instead of KDE's one "by date"
++        const bool byDate = (m_ops->sorting() & QDir::SortByMask) == QDir::Time;
++        const bool created = m_ops->property("_ng_created").toBool();
++        for (const bool which : {false, true}) {
++            QAction *action = menu->addAction(which ? ngLabel(nullptr, nullptr, "Sort by Date Created", "Ordina per data di creazione")
++                                                    : ngLabel(nullptr, nullptr, "Sort by Date Modified", "Ordina per data di modifica"));
++            action->setCheckable(true);
++            action->setChecked(byDate && created == which);
++            QObject::connect(action, &QAction::triggered, q, [this, which] {
++                ngSetSortCreated(which);
++            });
++        }
++        menu->addAction(m_ops->action(KDirOperator::SortByType));
++        menu->addSeparator();
++        menu->addAction(m_ops->action(KDirOperator::SortAscending));
++        menu->addAction(m_ops->action(KDirOperator::SortDescending));
++        menu->addSeparator();
++        menu->addAction(m_ops->action(KDirOperator::SortFoldersFirst));
++        menu->addAction(m_ops->action(KDirOperator::SortHiddenFilesLast));
++    });
++    for (auto a : {KDirOperator::SortByName, KDirOperator::SortBySize, KDirOperator::SortByDate, KDirOperator::SortByType, KDirOperator::SortAscending,
++                   KDirOperator::SortDescending, KDirOperator::SortFoldersFirst}) {
++        QObject::connect(m_ops->action(a), &QAction::triggered, q, [this] {
++            QTimer::singleShot(0, q, [this] {
++                ngUpdateBar();
++            });
++        });
++    }
++
++    // view: the NG rows (two lines or compact), KDE's columns, icons; the zoom and the previews
++    QObject::connect(m_ngViewButton->menu(), &QMenu::aboutToShow, q, [this] {
++        QMenu *menu = m_ngViewButton->menu();
++        menu->clear();
++        auto *group = new QActionGroup(menu);
++        const std::pair<QString, QString> modes[] = {{QStringLiteral("rows"), ngLabel(nullptr, nullptr, "Rows", "Righe")},
++                                                     {QStringLiteral("compact"), ngLabel(nullptr, nullptr, "Compact rows", "Righe compatte")},
++                                                     {QStringLiteral("details"), ngLabel(nullptr, nullptr, "Details (columns)", "Dettagli (colonne)")},
++                                                     {QStringLiteral("icons"), ngLabel(nullptr, nullptr, "Icons", "Icone")}};
++        for (const auto &[mode, label] : modes) {
++            QAction *action = menu->addAction(label);
++            action->setCheckable(true);
++            action->setChecked(m_ngView == mode);
++            group->addAction(action);
++            QObject::connect(action, &QAction::triggered, q, [this, mode] {
++                ngSetView(mode);
++            });
++        }
++        menu->addSeparator();
++        menu->addAction(m_ops->action(KDirOperator::ShowPreview));
++        // the large picture when the pointer rests on a file: a setting of the dialog's own (Dolphin NG has its own)
++        QAction *quick = menu->addAction(ngLabel(nullptr, nullptr, "Quick Preview on Hover", "Anteprima al passaggio del mouse"));
++        quick->setCheckable(true);
++        quick->setChecked(m_ops->property("_ng_quick").toBool());
++        QObject::connect(quick, &QAction::toggled, q, [this](bool on) {
++            m_ops->setProperty("_ng_quick", on);
++            KConfigGroup ng(KSharedConfig::openConfig(QStringLiteral("dialog-ngrc")), QStringLiteral("View"));
++            ng.writeEntry("QuickPreview", on);
++            ng.sync();
++        });
++        menu->addSeparator();
++        menu->addAction(m_zoomInAction);
++        menu->addAction(m_zoomOutAction);
++    });
++
++    // filters: the kinds present in the folder, with how many there are
++    QObject::connect(m_ngFiltersButton->menu(), &QMenu::aboutToShow, q, [this] {
++        QMenu *menu = m_ngFiltersButton->menu();
++        menu->clear();
++        ngCountKinds();
++        auto *group = new QActionGroup(menu);
++        for (int kind = 0; kind < ngFilterCount; ++kind) {
++            const int count = m_ngKindCounts.value(kind);
++            if (kind != 0 && count == 0 && kind != m_ngFilter) {
++                continue;
++            }
++            QAction *action = menu->addAction(QIcon::fromTheme(QString::fromLatin1(ngFilterKinds[kind].icon)),
++                                              ngLabel(ngFilterKinds[kind].domain, ngFilterKinds[kind].context, ngFilterKinds[kind].label, ngFilterKinds[kind].labelIt)
++                                                  + QLatin1Char('\t') + QString::number(count));
++            action->setCheckable(true);
++            action->setChecked(kind == m_ngFilter);
++            group->addAction(action);
++            QObject::connect(action, &QAction::triggered, q, [this, kind] {
++                ngSetFilter(kind);
++            });
++        }
++    });
++
++    // groups: titles between the rows, by the sort key chosen here
++    QObject::connect(m_ngGroupsButton->menu(), &QMenu::aboutToShow, q, [this] {
++        QMenu *menu = m_ngGroupsButton->menu();
++        menu->clear();
++        auto *group = new QActionGroup(menu);
++        const bool on = m_ops->property("_ng_groups").toBool();
++        const QDir::SortFlags by = m_ops->sorting() & QDir::SortByMask;
++        const struct {
++            int id;
++            const char *en;
++            const char *it;
++            bool checked;
++        } entries[] = {{0, "None", "Nessuno", !on},
++                       {1, "By date", "Per data", on && by == QDir::Time},
++                       {2, "By type", "Per tipo", on && by == QDir::Type},
++                       {3, "By name", "Per nome", on && by == QDir::Name},
++                       {4, "By size", "Per dimensione", on && by == QDir::Size}};
++        for (const auto &entry : entries) {
++            QAction *action = menu->addAction(ngLabel(nullptr, nullptr, entry.en, entry.it));
++            action->setCheckable(true);
++            action->setChecked(entry.checked);
++            group->addAction(action);
++            const int id = entry.id;
++            QObject::connect(action, &QAction::triggered, q, [this, id] {
++                ngSetGroups(id);
++            });
++        }
++        if (m_ngView != QLatin1String("rows") && m_ngView != QLatin1String("compact")) {
++            menu->setEnabled(true);
++            menu->addSeparator();
++            menu->addAction(ngLabel(nullptr, nullptr, "(in the rows views)", "(nelle viste a righe)"))->setEnabled(false);
++        }
++    });
++
++    QObject::connect(m_ops->dirLister(), &KCoreDirLister::completed, q, [this] {
++        ngUpdateBar();
++        ngFillChips();
++    });
++    QObject::connect(m_ops->dirLister(), &KCoreDirLister::itemsDeleted, q, [this] {
++        ngFillChips();
++    });
++    ngUpdateBar();
++    return bar;
++}
++
++void KFileWidgetPrivate::ngUpdateBar()
++{
++    if (!m_ngSortButton) {
++        return;
++    }
++    const QDir::SortFlags sorting = m_ops->sorting();
++    QString by;
++    switch (sorting & QDir::SortByMask) {
++    case QDir::Time:
++        by = m_ops->property("_ng_created").toBool() ? ngLabel(nullptr, nullptr, "Created", "Creazione") : ngLabel(nullptr, nullptr, "Modified", "Modifica");
++        break;
++    case QDir::Size:
++        by = ngLabel(nullptr, nullptr, "Size", "Dimensione");
++        break;
++    case QDir::Type:
++        by = ngLabel(nullptr, nullptr, "Type", "Tipo");
++        break;
++    default:
++        by = ngLabel(nullptr, nullptr, "Name", "Nome");
++    }
++    m_ngSortButton->setText(ngLabel(nullptr, nullptr, "Sort: %1", "Ordina: %1").arg(by));
++    m_ngSortButton->setIcon(QIcon::fromTheme((sorting & QDir::Reversed) ? QStringLiteral("view-sort-descending") : QStringLiteral("view-sort-ascending")));
++
++    const QString view = m_ngView == QLatin1String("compact") ? ngLabel(nullptr, nullptr, "Compact rows", "Righe compatte")
++        : m_ngView == QLatin1String("details")                ? ngLabel(nullptr, nullptr, "Details", "Dettagli")
++        : m_ngView == QLatin1String("icons")                  ? ngLabel(nullptr, nullptr, "Icons", "Icone")
++                                                              : ngLabel(nullptr, nullptr, "Rows", "Righe");
++    m_ngViewButton->setText(view);
++    m_ngViewButton->setIcon(QIcon::fromTheme(m_ngView == QLatin1String("icons") ? QStringLiteral("view-list-icons") : QStringLiteral("view-list-details")));
++
++    const auto &kind = ngFilterKinds[qBound(0, m_ngFilter, ngFilterCount - 1)];
++    m_ngFiltersButton->setText(ngLabel(nullptr, nullptr, "Filters: %1", "Filtri: %1").arg(ngLabel(kind.domain, kind.context, kind.label, kind.labelIt)));
++
++    const bool rows = m_ngView == QLatin1String("rows") || m_ngView == QLatin1String("compact");
++    m_ngGroupsButton->setText(ngLabel(nullptr, nullptr, "Groups: %1", "Gruppi: %1")
++                                  .arg(m_ops->property("_ng_groups").toBool() && rows ? by : ngLabel(nullptr, nullptr, "none", "nessuno")));
++}
++
++void KFileWidgetPrivate::ngFillChips()
++{
++    if (!m_ngChips) {
++        return;
++    }
++    ngCountKinds();
++    QLayout *layout = m_ngChips->layout();
++    while (QLayoutItem *item = layout->takeAt(0)) {
++        delete item->widget();
++        delete item;
++    }
++    for (int kind = 0; kind < ngFilterCount; ++kind) {
++        const int count = m_ngKindCounts.value(kind);
++        if (kind != 0 && count == 0 && kind != m_ngFilter) {
++            continue;
++        }
++        auto *chip = new QToolButton(m_ngChips);
++        chip->setAutoRaise(true);
++        chip->setCheckable(true);
++        chip->setChecked(kind == m_ngFilter);
++        chip->setToolButtonStyle(Qt::ToolButtonTextOnly);
++        const QString label = kind == 0 ? ngLabel(nullptr, nullptr, "All", "Tutti")
++                                        : ngLabel(ngFilterKinds[kind].domain, ngFilterKinds[kind].context, ngFilterKinds[kind].label, ngFilterKinds[kind].labelIt);
++        chip->setText(QStringLiteral("%1  %2").arg(label).arg(count));
++        QObject::connect(chip, &QToolButton::clicked, q, [this, kind] {
++            ngSetFilter(kind);
++        });
++        layout->addWidget(chip);
++    }
++    ngFitBar();
++    ngFillSide();
++}
++
++void KFileWidgetPrivate::ngFitBar()
++{
++    // the chips need the room they ask for, beside the other buttons; when it is not there, the menu button stands
++    // for them
++    if (!m_ngChips || !m_ngFiltersButton) {
++        return;
++    }
++    QWidget *bar = m_ngChips->parentWidget();
++    const int width = bar->width() - 16;
++    const int fixed = m_ngSortButton->sizeHint().width() + m_ngViewButton->sizeHint().width() + m_ngGroupsButton->sizeHint().width() + 24;
++    const int chips = m_ngChips->sizeHint().width();
++    // beside the buttons; else on a row of their own; else the button and its menu
++    const bool inline_ = fixed + chips <= width;
++    const bool ownRow = !inline_ && chips <= width;
++    if (inline_ && m_ngBarRow->indexOf(m_ngChips) < 0) {
++        m_ngChipsRow->removeWidget(m_ngChips);
++        m_ngBarRow->insertWidget(m_ngBarRow->count() - 1, m_ngChips);
++    } else if (ownRow && m_ngChipsRow->indexOf(m_ngChips) < 0) {
++        m_ngBarRow->removeWidget(m_ngChips);
++        m_ngChipsRow->insertWidget(0, m_ngChips);
++    }
++    m_ngChips->layout()->setContentsMargins(inline_ ? 10 : 0, 0, 0, 0);
++    m_ngChips->setVisible(inline_ || ownRow);
++    m_ngFiltersButton->setVisible(!inline_ && !ownRow);
++}
++
++void KFileWidgetPrivate::ngSetSortCreated(bool created)
++{
++    KConfigGroup ng(KSharedConfig::openConfig(QStringLiteral("dialog-ngrc")), QStringLiteral("View"));
++    ng.writeEntry("SortCreated", created);
++    ng.sync();
++    m_ops->setProperty("_ng_created", created);
++    if (auto *proxy = m_ops->findChild<KDirSortFilterProxyModel *>()) {
++        proxy->setProperty("_ng_created", created);
++    }
++    m_ops->action(KDirOperator::SortByDate)->trigger(); // newest first, as one usually wants by date
++    m_ops->action(KDirOperator::SortDescending)->trigger();
++    if (auto *proxy = m_ops->findChild<KDirSortFilterProxyModel *>()) {
++        proxy->invalidate();
++    }
++    if (QAbstractItemView *view = m_ops->view()) {
++        view->doItemsLayout();
++        view->viewport()->update();
++    }
++    ngUpdateBar();
++}
++
++void KFileWidgetPrivate::ngSetView(const QString &mode)
++{
++    m_ngView = mode;
++    KConfigGroup ng(KSharedConfig::openConfig(QStringLiteral("dialog-ngrc")), QStringLiteral("View"));
++    ng.writeEntry("Mode", mode);
++    ng.sync();
++    m_ops->setProperty("_ng_rows", mode == QLatin1String("rows") ? 1 : mode == QLatin1String("compact") ? 2 : 0);
++    if (mode == QLatin1String("icons")) {
++        m_ops->action(KDirOperator::ViewIconsView)->trigger();
++    } else {
++        m_ops->setViewMode(KFile::Detail);
++    }
++    ngUpdateBar();
++}
++
++void KFileWidgetPrivate::ngSetGroups(int by)
++{
++    // a group follows the sort key: choosing one sorts by it (dates and sizes from the largest/newest)
++    KConfigGroup ng(KSharedConfig::openConfig(QStringLiteral("dialog-ngrc")), QStringLiteral("View"));
++    ng.writeEntry("Groups", by != 0);
++    ng.sync();
++    m_ops->setProperty("_ng_groups", by != 0);
++    const KDirOperator::Action sortBy[] = {KDirOperator::SortByName, KDirOperator::SortByDate, KDirOperator::SortByType, KDirOperator::SortByName, KDirOperator::SortBySize};
++    if (by != 0) {
++        m_ops->action(sortBy[by])->trigger();
++        m_ops->action(by == 1 || by == 4 ? KDirOperator::SortDescending : KDirOperator::SortAscending)->trigger();
++    }
++    if (QAbstractItemView *view = m_ops->view()) {
++        view->doItemsLayout(); // the titles change the height of the rows
++        view->viewport()->update();
++    }
++    ngUpdateBar();
++}
++
++void KFileWidgetPrivate::ngCountKinds()
++{
++    // what the folder holds, all of it (not what the current filter shows)
++    static QList<QSet<QString>> suffixes;
++    if (suffixes.isEmpty()) {
++        for (int kind = 0; kind < ngFilterCount; ++kind) {
++            QSet<QString> set;
++            for (const QString &pattern : QString::fromLatin1(ngFilterKinds[kind].patterns).split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
++                set.insert(pattern.mid(2));
++            }
++            suffixes.append(set);
++        }
++    }
++    m_ngKindCounts = QList<int>(ngFilterCount, 0);
++    const KFileItemList items = m_ops->dirLister()->items(KCoreDirLister::AllItems);
++    for (const KFileItem &item : items) {
++        if (!m_ops->dirLister()->showHiddenFiles() && item.isHidden()) {
++            continue;
++        }
++        ++m_ngKindCounts[0];
++        if (item.isDir()) {
++            continue;
++        }
++        const QString suffix = QFileInfo(item.name()).suffix().toLower();
++        for (int kind = 1; kind < ngFilterCount; ++kind) {
++            if (suffixes.at(kind).contains(suffix)) {
++                ++m_ngKindCounts[kind];
++                break;
++            }
++        }
++    }
++}
++
++// kio-ng: the sidebar of Dialog NG ----------------------------------------------------------------------------------
++QWidget *KFileWidgetPrivate::ngSidebar(QWidget *parent)
++{
++    m_ngCard = new NgSideCard(parent);
++    m_ngCard->glass = m_ngGlassWindow != nullptr;
++    m_ngCard->geometryChanged = [this] {
++        ngUpdateBlur();
++    };
++    auto *layout = new QVBoxLayout(m_ngCard);
++    layout->setContentsMargins(14, 12, 12, 14);
++    layout->setSpacing(1);
++
++    // the places, on the card: no ground of their own, section titles as pills
++    m_placesView->setProperty("ngPills", true);
++    m_placesView->setFrameShape(QFrame::NoFrame);
++    m_placesView->setAutoFillBackground(false);
++    m_placesView->viewport()->setAutoFillBackground(false);
++    QPalette clear = m_placesView->palette();
++    clear.setColor(QPalette::Base, Qt::transparent);
++    m_placesView->setPalette(clear);
++    layout->addWidget(m_placesView, 1);
++
++    // pinned in Dolphin NG (dolphinrc): folders first, then files
++    {
++        const KConfigGroup dolphin(KSharedConfig::openConfig(QStringLiteral("dolphinrc")), QStringLiteral("DolphinNG"));
++        QStringList folders, files;
++        for (const QString &path : dolphin.readEntry("PinnedPaths", QStringList())) {
++            const QFileInfo info(path);
++            if (info.exists()) {
++                (info.isDir() ? folders : files).append(path);
++            }
++        }
++        if (!folders.isEmpty() || !files.isEmpty()) {
++            layout->addSpacing(4);
++            layout->addWidget(new NgPill(ngLabel(nullptr, nullptr, "Pinned", "Fissati"), m_ngCard));
++            QMimeDatabase db;
++            for (const QString &path : folders + files) {
++                const QFileInfo info(path);
++                const QIcon icon = info.isDir() ? QIcon::fromTheme(QStringLiteral("folder")) : QIcon::fromTheme(db.mimeTypeForFile(info).iconName());
++                auto *row = new NgSideRow(icon, info.fileName(), QString(), m_ngCard);
++                const bool folder = info.isDir();
++                QObject::connect(row, &QAbstractButton::clicked, q, [this, path, folder] {
++                    if (folder) {
++                        enterUrl(QUrl::fromLocalFile(path));
++                    } else {
++                        q->setSelectedUrl(QUrl::fromLocalFile(path)); // its folder, with it selected
++                    }
++                });
++                layout->addWidget(row);
++            }
++        }
++    }
++
++    // the filters: the kinds in the folder, with how many
++    layout->addSpacing(4);
++    layout->addWidget(new NgPill(ngLabel(nullptr, nullptr, "Filters", "Filtri"), m_ngCard));
++    m_ngSideFilters = new QWidget(m_ngCard);
++    auto *filters = new QVBoxLayout(m_ngSideFilters);
++    filters->setContentsMargins(0, 0, 0, 0);
++    filters->setSpacing(1);
++    layout->addWidget(m_ngSideFilters);
++
++    // the disk
++    layout->addSpacing(8);
++    auto *disk = new NgDiskBox(m_ngCard);
++    disk->opened = [this](const QString &root) {
++        enterUrl(QUrl::fromLocalFile(root));
++    };
++    layout->addWidget(disk);
++
++    ngFillSide();
++    return m_ngCard;
++}
++
++void KFileWidgetPrivate::ngFillSide()
++{
++    if (!m_ngSideFilters) {
++        return;
++    }
++    QLayout *layout = m_ngSideFilters->layout();
++    while (QLayoutItem *item = layout->takeAt(0)) {
++        delete item->widget();
++        delete item;
++    }
++    for (int kind = 0; kind < ngFilterCount; ++kind) {
++        const int count = m_ngKindCounts.value(kind);
++        if (kind != 0 && count == 0 && kind != m_ngFilter) {
++            continue;
++        }
++        const QString label = kind == 0 ? ngLabel(nullptr, nullptr, "All", "Tutti")
++                                        : ngLabel(ngFilterKinds[kind].domain, ngFilterKinds[kind].context, ngFilterKinds[kind].label, ngFilterKinds[kind].labelIt);
++        auto *row = new NgSideRow(QIcon::fromTheme(QString::fromLatin1(ngFilterKinds[kind].icon)), label, QString::number(count), m_ngSideFilters);
++        row->setCheckable(true);
++        row->setChecked(kind == m_ngFilter);
++        QObject::connect(row, &QAbstractButton::clicked, q, [this, kind] {
++            ngSetFilter(kind);
++        });
++        layout->addWidget(row);
++    }
++}
++
++void KFileWidgetPrivate::ngUpdateBlur()
++{
++    if (!m_ngGlassWindow || !m_ngCard || !m_ngGlassWindow->windowHandle()) {
++        return;
++    }
++    QRegion region;
++    if (m_ngCard->isVisible()) {
++        const QRectF card = m_ngCard->cardRect();
++        region = QRegion(QRect(m_ngCard->mapTo(m_ngGlassWindow, card.topLeft().toPoint()), card.size().toSize()));
++    }
++    KWindowEffects::enableBlurBehind(m_ngGlassWindow->windowHandle(), !region.isEmpty(), region);
++}
++
 +
  void KFileWidgetPrivate::slotFileFilterChanged()
  {
      m_filterDelayTimer.stop();
+@@ -2012,7 +2908,8 @@ void KFileWidget::showEvent(QShowEvent *event)
+     if (!d->m_hasView) { // delayed view-creation
+         Q_ASSERT(d);
+         Q_ASSERT(d->m_ops);
+-        d->m_ops->setViewMode(KFile::Default);
++        // kio-ng: the rows and KDE's columns are the detail view; icons follow KDE's own setting
++        d->m_ops->setViewMode(d->m_ngView == QLatin1String("icons") ? KFile::Default : KFile::Detail);
+         d->m_hasView = true;
+ 
+         connect(d->m_ops->view(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
+@@ -2022,6 +2919,9 @@ void KFileWidget::showEvent(QShowEvent *event)
+     d->m_ops->clearHistory();
+ 
+     QWidget::showEvent(event);
++    QTimer::singleShot(0, this, [this] {
++        d->ngUpdateBlur(); // kio-ng: the window exists now: ask for the blur behind the glass
++    });
+ }
+ 
+ bool KFileWidget::eventFilter(QObject *watched, QEvent *event)
+@@ -2087,6 +2987,24 @@ void KFileWidgetPrivate::readViewConfig()
+     m_ops->setViewConfig(m_configGroup);
+     m_ops->readConfig(m_configGroup);
+ 
++    // kio-ng: Dialog NG's view: its rows (two lines, or compact), KDE's columns or icons; groups between the rows
++    {
++        const KConfigGroup ng(KSharedConfig::openConfig(QStringLiteral("dialog-ngrc")), QStringLiteral("View"));
++        m_ngView = ng.readEntry("Mode", QStringLiteral("rows"));
++        m_ops->setProperty("_ng_rows", m_ngView == QLatin1String("rows") ? 1 : m_ngView == QLatin1String("compact") ? 2 : 0);
++        m_ops->setProperty("_ng_groups", ng.readEntry("Groups", false));
++        m_ops->setProperty("_ng_scale", ng.readEntry("RowScale", 1.0));
++        m_ops->setProperty("_ng_quick", ng.readEntry("QuickPreview", true));
++        m_ops->setProperty("_ng_quick_delay", ng.readEntry("QuickDelay", 0));
++        m_ops->setProperty("_ng_quick_size", ng.readEntry("QuickSize", QStringLiteral("medium")));
++        const bool created = ng.readEntry("SortCreated", false);
++        m_ops->setProperty("_ng_created", created);
++        if (auto *proxy = m_ops->findChild<KDirSortFilterProxyModel *>()) {
++            proxy->setProperty("_ng_pinned_first", true); // what is pinned in Dolphin NG comes first here too
++            proxy->setProperty("_ng_created", created);
++        }
++    }
++
+     // Show or don't show the places panel
+     togglePlacesPanel(m_configGroup.readEntry(ShowSpeedbar, true));
+ 
+@@ -2095,7 +3013,7 @@ void KFileWidgetPrivate::readViewConfig()
+     updateAutoSelectExtension();
+ 
+     // should the URL navigator use the breadcrumb navigation?
+-    m_urlNavigator->setUrlEditable(!m_configGroup.readEntry(BreadcrumbNavigation, true));
++    m_urlNavigator->setUrlEditable(false); // kio-ng: breadcrumbs (a click on the empty part still edits the path)
+ 
+     // should the URL navigator show the full path?
+     m_urlNavigator->setShowFullPath(m_configGroup.readEntry(ShowFullPath, false));
