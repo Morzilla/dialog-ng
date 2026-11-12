@@ -2,20 +2,46 @@ dialog-ng: quick filters by kind of file in KDE's file dialog, a roomier places 
 Applies to KIO (frameworks/kio), from v6.31.0; only src/filewidgets is touched.
 
 diff --git a/src/filewidgets/kfileplacesview.cpp b/src/filewidgets/kfileplacesview.cpp
-index dc8f0f3..3832d20 100644
+index dc8f0f3..e174d17 100644
 --- a/src/filewidgets/kfileplacesview.cpp
 +++ b/src/filewidgets/kfileplacesview.cpp
-@@ -90,7 +90,8 @@ QSize KFilePlacesViewDelegate::sizeHint(const QStyleOptionViewItem &option, cons
+@@ -90,7 +90,13 @@ QSize KFilePlacesViewDelegate::sizeHint(const QStyleOptionViewItem &option, cons
      hintOption.features |= QStyleOptionViewItem::HasDecoration;
      hintOption.decorationSize = {m_iconSize, m_iconSize};
  
 -    int height = QApplication::style()->sizeFromContents(QStyle::CT_ItemViewItem, &hintOption, {}, option.widget).height();
-+    // kio-ng: a little air above and below each place
-+    int height = QApplication::style()->sizeFromContents(QStyle::CT_ItemViewItem, &hintOption, {}, option.widget).height() + 8;
++    // kio-ng: a little air above and below each place; an application can choose how much with the view's
++    // "ngRowPadding" property (Dolphin NG wants a tighter list than the file dialog)
++    int padding = 8;
++    if (option.widget && option.widget->property("ngRowPadding").isValid()) {
++        padding = option.widget->property("ngRowPadding").toInt();
++    }
++    int height = QApplication::style()->sizeFromContents(QStyle::CT_ItemViewItem, &hintOption, {}, option.widget).height() + padding;
  
      if (m_appearingItems.contains(index)) {
          height *= m_appearingHeightScale;
-@@ -1830,7 +1831,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
+@@ -172,7 +178,10 @@ void KFilePlacesViewDelegate::paint(QPainter *painter, const QStyleOptionViewIte
+     }
+ 
+     bool isLTR = opt.direction == Qt::LeftToRight;
+-    const int iconAreaWidth = s_lateralMargin + m_iconSize;
++    // kio-ng: the view's "ngIconIndent" property moves icon and text inwards (Dolphin NG draws its selection as a
++    // pill with round ends, which would otherwise run into the icon)
++    const int indent = opt.widget ? opt.widget->property("ngIconIndent").toInt() : 0;
++    const int iconAreaWidth = s_lateralMargin + indent + m_iconSize;
+     const int actionAreaWidth = !actionIcon.isNull() ? s_lateralMargin + actionIconSize() : s_lateralMargin;
+     QRect rectText((isLTR ? iconAreaWidth : actionAreaWidth) + s_lateralMargin,
+                    opt.rect.top(),
+@@ -189,7 +198,7 @@ void KFilePlacesViewDelegate::paint(QPainter *painter, const QStyleOptionViewIte
+     QIcon::Mode mode = selectedAndActive ? QIcon::Selected : QIcon::Normal;
+     QIcon icon = index.model()->data(index, Qt::DecorationRole).value<QIcon>();
+     QPixmap pm = icon.pixmap(m_iconSize, m_iconSize, mode);
+-    QPoint point(isLTR ? opt.rect.left() + s_lateralMargin : opt.rect.right() - s_lateralMargin - m_iconSize,
++    QPoint point(isLTR ? opt.rect.left() + s_lateralMargin + indent : opt.rect.right() - s_lateralMargin - indent - m_iconSize,
+                  opt.rect.top() + (opt.rect.height() - m_iconSize) / 2);
+     painter->drawPixmap(point, pm);
+ 
+@@ -1830,7 +1839,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
          return; // We've nothing to display anyway
      }
  
@@ -25,7 +51,7 @@ index dc8f0f3..3832d20 100644
      const int maxSize = 64;
      QFontMetrics fm = q->fontMetrics();
  
-@@ -1889,6 +1891,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
+@@ -1889,6 +1899,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
          size = minSize;
      } else if (size > maxSize) {
          size = maxSize;
