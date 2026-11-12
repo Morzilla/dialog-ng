@@ -32,8 +32,28 @@ kio_version() { basename "$(system_lib)" | sed -n 's/^libKF6KIOFileWidgets\.so\.
 
 case "${1:-}" in
 deps)
-    if command -v dnf >/dev/null; then sudo dnf install -y git cmake extra-cmake-modules gcc-c++ 'dnf-command(builddep)' && sudo dnf builddep -y kf6-kio
-    elif command -v apt-get >/dev/null; then sudo apt-get install -y git cmake extra-cmake-modules g++ qt6-base-dev-tools && { sudo apt-get build-dep -y kf6-kio || sudo apt-get build-dep -y kio; }
+    # every transaction is simulated first: one that would remove packages, downgrade them, or upgrade the desktop
+    # itself (Plasma, KWin, KDE Frameworks, Qt...) is not run without asking (it must match the KIO installed now)
+    CORE='^(plasma|kwin|kf6-|libkf6|qt6|libqt6|libplasma|kdecoration|libkworkspace|kscreen|sddm|breeze|xorg|xwayland|mesa|systemd|glibc|dbus)'
+    safe() { # dnf|apt-get, command and packages
+        local m="$1" sim changes answer; shift
+        if [ "$m" = dnf ]; then
+            sim=$(LC_ALL=C sudo dnf "$@" --assumeno 2>&1 || true)
+            changes=$(awk -v core="$CORE" '/^[A-Z][A-Za-z ]*:$/ { sec = $0; next } /^$/ { sec = ""; next }
+                /^ [^ ]/ && sec != "" { if (sec ~ /^(Removing|Downgrading|Replacing)/) print $1; else if (sec ~ /^Upgrading/ && $1 ~ core) print $1 " (upgrade)" }' <<<"$sim")
+        else
+            sim=$(LC_ALL=C sudo apt-get -s "$@" 2>&1 || true)
+            changes=$(awk -v core="$CORE" '/^Remv / { print $2 } /^Inst [^ ]+ \[/ && $2 ~ core { print $2 " (upgrade)" }' <<<"$sim")
+        fi
+        if [ -n "$changes" ]; then
+            echo "!! \"$m $*\" would change packages of the desktop itself:" >&2; printf '%s\n' "$changes" | sed 's/^/   /' >&2
+            read -r -p "Go on anyway? [y/N] " answer </dev/tty || answer=""
+            case "$answer" in y*|Y*|s*|S*) ;; *) echo "skipped" >&2; return 1 ;; esac
+        fi
+        if [ "$m" = dnf ]; then sudo dnf "$@" -y; else sudo apt-get "$@" -y; fi
+    }
+    if command -v dnf >/dev/null; then safe dnf install git cmake extra-cmake-modules gcc-c++ 'dnf-command(builddep)' && safe dnf builddep kf6-kio
+    elif command -v apt-get >/dev/null; then safe apt-get install git cmake extra-cmake-modules g++ qt6-base-dev-tools && { safe apt-get build-dep kf6-kio || safe apt-get build-dep kio; }
     elif command -v pacman >/dev/null; then sudo pacman -S --needed --noconfirm git cmake extra-cmake-modules base-devel kio
     else echo "unknown package manager: install KIO's build dependencies by hand"; exit 1; fi ;;
 build)
