@@ -1,5 +1,14 @@
 # Dialog NG
 
+**Fedora 44 and 45: there are ready-made packages on COPR**, no building needed:
+
+```
+sudo dnf copr enable morzilla/desktop-ng
+sudo dnf install dialog-ng
+```
+
+Log out and in again to get the new dialog. The same repository has the rest of the NG desktop: `breeze-ng`, `dolphin-ng`, `dialog-ng`, `neoline-icons` ([project page](https://copr.fedorainfracloud.org/coprs/morzilla/desktop-ng/)).
+
 KDE's file dialog — the one every KDE app opens to pick or save a file, and that Firefox, Chrome and
 Flatpak apps get through the desktop portal — with:
 
