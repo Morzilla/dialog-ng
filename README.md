@@ -12,7 +12,9 @@ Log out and in again to get the new dialog. The same repository has the rest of 
 KDE's file dialog — the one every KDE app opens to pick or save a file, and that Firefox, Chrome and
 Flatpak apps get through the desktop portal — with:
 
-![The NG file dialog: rows, filters, groups and the glass sidebar](screenshots/dialog.png)
+| Dark | Light |
+|---|---|
+| <img src="screenshots/dialog-dark.png" width="420" alt="Dialog NG with Breeze NG's Aurora Glass, dark: the strip with the kinds of file, the rows, the glass sidebar"> | <img src="screenshots/dialog-light.png" width="420" alt="Dialog NG with Breeze NG's Aurora Glass, light"> |
 
 It looks and works like [Dolphin NG](https://github.com/Morzilla/dolphin-ng):
 
@@ -22,10 +24,9 @@ It looks and works like [Dolphin NG](https://github.com/Morzilla/dolphin-ng):
   still in the View menu;
 - **a quick preview**: rest the pointer on a file and a large picture of it shows beside the list (at once,
   or after the delay you choose; small, medium or large);
-- **one bar**: sort (by name, size, type, date modified or **date created**), view, filters, groups, with the
-  choice written on each button, and the path as breadcrumbs;
-- **quick filters by kind of file**, with how many there are: chips in the bar when there is room, on a row of
-  their own when not, a menu when the window is narrow;
+- **one strip above the files**: the kinds of file present in the folder as chips, each with its icon and how
+  many there are (narrower: only the icons and the numbers; narrower still, a Filters button with a menu); on
+  the right the sorting (by name, size, type, date modified or **date created**), the view and the groups;
 - **groups**: titles between the rows, following the sort order (Today, Yesterday, This week…);
 - **pinned items**: what is pinned in Dolphin NG comes first in its folder, and has its own section in the
   sidebar;
