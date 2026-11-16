@@ -1589,7 +1589,7 @@ index dc8f0f3..4bd406b 100644
          } else {
              q->setRowHidden(i, false);
 diff --git a/src/filewidgets/kfilewidget.cpp b/src/filewidgets/kfilewidget.cpp
-index 86abbf2..0af1966 100644
+index 86abbf2..153366d 100644
 --- a/src/filewidgets/kfilewidget.cpp
 +++ b/src/filewidgets/kfilewidget.cpp
 @@ -64,6 +64,16 @@
@@ -1618,7 +1618,7 @@ index 86abbf2..0af1966 100644
  
  #include <algorithm>
  #include <array>
-@@ -80,6 +92,270 @@
+@@ -80,6 +92,405 @@
  Q_DECLARE_LOGGING_CATEGORY(KIO_KFILEWIDGETS_FW)
  Q_LOGGING_CATEGORY(KIO_KFILEWIDGETS_FW, "kf.kio.kfilewidgets.kfilewidget", QtInfoMsg)
  
@@ -1737,6 +1737,141 @@ index 86abbf2..0af1966 100644
 +
 +private:
 +    QString m_text;
++};
++
++// the strip above the files: one sheet of glass (a tinted panel without Aurora) that holds the kinds and the
++// view buttons
++class NgStrip : public QWidget
++{
++public:
++    using QWidget::QWidget;
++
++protected:
++    void paintEvent(QPaintEvent *) override
++    {
++        QPainter painter(this);
++        painter.setRenderHint(QPainter::Antialiasing);
++        QColor ink = palette().color(QPalette::WindowText);
++        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
++        if (NgLook::aurora()) {
++            painter.setPen(Qt::NoPen);
++            painter.setBrush(NgLook::veil(ngDark(this), false));
++        } else {
++            ink.setAlphaF(0.09);
++            painter.setPen(ink);
++            ink.setAlphaF(0.04);
++            painter.setBrush(ink);
++        }
++        painter.drawRoundedRect(r, 11, 11);
++    }
++};
++
++// one kind of file in the strip: its icon (in the colour of its kind), its name, how many there are in a little pill
++class NgChip : public QAbstractButton
++{
++public:
++    NgChip(const QIcon &icon, const QString &label, int count, QWidget *parent)
++        : QAbstractButton(parent)
++        , m_count(count)
++    {
++        setIcon(icon);
++        setText(label);
++        setCheckable(true);
++        setAttribute(Qt::WA_Hover);
++        setCursor(Qt::PointingHandCursor);
++        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
++    }
++    QSize sizeHint() const override
++    {
++        const QFontMetrics fm(font());
++        return QSize(9 + (icon().isNull() ? 0 : 22) + (named() ? fm.horizontalAdvance(text()) + 7 : -4) + pillWidth() + 7, qMax(26, fm.height() + 10));
++    }
++    // when the strip is short of room: the icon and the number only (the name in the tooltip); "All" and the chip that
++    // is on keep their name
++    void setCompact(bool compact)
++    {
++        if (m_compact != compact) {
++            m_compact = compact;
++            setToolTip(compact ? text() : QString());
++            updateGeometry();
++            update();
++        }
++    }
++
++protected:
++    bool event(QEvent *event) override
++    {
++        if (event->type() == QEvent::HoverEnter || event->type() == QEvent::HoverLeave) {
++            update();
++        }
++        return QAbstractButton::event(event);
++    }
++    void paintEvent(QPaintEvent *) override
++    {
++        QPainter painter(this);
++        painter.setRenderHint(QPainter::Antialiasing);
++        const bool dark = ngDark(this);
++        QColor ink = palette().color(QPalette::WindowText);
++        QColor back(Qt::transparent);
++        if (isChecked()) {
++            back = NgLook::aurora() ? NgLook::selection(palette()) : ink;
++            if (!NgLook::aurora()) {
++                back.setAlphaF(0.16);
++            }
++        } else if (underMouse()) {
++            back = (NgLook::aurora() || dark) ? QColor(255, 255, 255) : ink;
++            back.setAlphaF(NgLook::aurora() && !dark ? 0.5 : 0.08);
++        }
++        const QRectF r = QRectF(rect()).adjusted(0, 1, 0, -1);
++        painter.setPen(Qt::NoPen);
++        painter.setBrush(back);
++        painter.drawRoundedRect(r, 8, 8);
++        const QColor fore = isChecked() && NgLook::aurora() ? NgLook::selectionText(palette()) : ink;
++        int x = 9;
++        if (!icon().isNull()) {
++            icon().paint(&painter, QRect(x, (height() - 16) / 2, 16, 16));
++            x += 22;
++        }
++        const QFontMetrics fm(font());
++        if (named()) {
++            painter.setPen(fore);
++            painter.drawText(QRect(x, 0, width() - x, height()), Qt::AlignVCenter | Qt::AlignLeft, text());
++            x += fm.horizontalAdvance(text()) + 7;
++        } else {
++            x -= 4;
++        }
++        const QFont small = smallFont();
++        const QFontMetrics sm(small);
++        const QRectF pill(x, (height() - sm.height() - 2) / 2.0, pillWidth(), sm.height() + 2);
++        QColor pillBack = fore;
++        pillBack.setAlphaF(0.13);
++        painter.setPen(Qt::NoPen);
++        painter.setBrush(pillBack);
++        painter.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
++        QColor pillText = fore;
++        pillText.setAlphaF(0.8);
++        painter.setPen(pillText);
++        painter.setFont(small);
++        painter.drawText(pill, Qt::AlignCenter, QString::number(m_count));
++    }
++
++private:
++    QFont smallFont() const
++    {
++        QFont f = font();
++        f.setPointSizeF(f.pointSizeF() * 0.8);
++        return f;
++    }
++    int pillWidth() const
++    {
++        return QFontMetrics(smallFont()).horizontalAdvance(QString::number(m_count)) + 12;
++    }
++    bool named() const
++    {
++        return !m_compact || icon().isNull() || isChecked();
++    }
++    int m_count;
++    bool m_compact = false;
 +};
 +
 +// a row of the sidebar's own sections (pinned items, filters): icon, label, a number on the right
@@ -1889,7 +2024,7 @@ index 86abbf2..0af1966 100644
  class KFileWidgetPrivate
  {
  public:
-@@ -224,6 +500,40 @@ public:
+@@ -224,6 +635,39 @@ public:
      QWidget *m_opsWidget = nullptr;
      QVBoxLayout *m_opsWidgetLayout = nullptr;
  
@@ -1916,7 +2051,6 @@ index 86abbf2..0af1966 100644
 +    QWidget *m_ngGlassWindow = nullptr; // the window made see-through for the glass
 +    QWidget *m_ngChips = nullptr; // the kinds present as chips, when the bar has room for them
 +    QHBoxLayout *m_ngBarRow = nullptr; // the row of the buttons (the chips go at its end when there is room)
-+    QHBoxLayout *m_ngChipsRow = nullptr; // a row of their own below, when not
 +    void ngFillChips();
 +    void ngFitBar();
 +    void ngSetSortCreated(bool created);
@@ -1930,7 +2064,7 @@ index 86abbf2..0af1966 100644
      QLabel *m_filterLabel = nullptr;
      KUrlNavigator *m_urlNavigator = nullptr;
      KMessageWidget *m_messageWidget = nullptr;
-@@ -358,6 +668,18 @@ KFileWidget::KFileWidget(const QUrl &_startDir, QWidget *parent)
+@@ -358,6 +802,18 @@ KFileWidget::KFileWidget(const QUrl &_startDir, QWidget *parent)
      : QWidget(parent)
      , d(new KFileWidgetPrivate(this))
  {
@@ -1949,7 +2083,7 @@ index 86abbf2..0af1966 100644
      QUrl startDir(_startDir);
      // qDebug() << "startDir" << startDir;
      QString filename;
-@@ -1087,10 +1409,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
+@@ -1087,10 +1543,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
      const auto navWidget = new QWidget(m_opsWidget);
      const auto navLayout = new QHBoxLayout(navWidget);
      navLayout->addWidget(m_urlNavigator);
@@ -1962,7 +2096,7 @@ index 86abbf2..0af1966 100644
  
      m_messageWidget = new KMessageWidget(q);
      m_messageWidget->setMessageType(KMessageWidget::Error);
-@@ -1146,9 +1466,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
+@@ -1146,9 +1600,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
      initToolbar();
  
      m_opsWidgetLayout->addWidget(m_toolbar);
@@ -1975,7 +2109,7 @@ index 86abbf2..0af1966 100644
      m_opsWidgetLayout->addWidget(m_ops);
      m_opsWidgetLayout->addWidget(bottomSparator);
  }
-@@ -1277,32 +1599,72 @@ void KFileWidgetPrivate::initToolbar()
+@@ -1277,32 +1733,72 @@ void KFileWidgetPrivate::initToolbar()
      });
      m_bookmarkButton->setMenu(m_bookmarkHandler->menu());
  
@@ -2068,7 +2202,7 @@ index 86abbf2..0af1966 100644
  
      m_toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
      m_toolbar->setMovable(false);
-@@ -1484,8 +1846,31 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1484,8 +1980,31 @@ void KFileWidgetPrivate::initPlacesPanel()
      m_placesDock->setTitleBarWidget(new KDEPrivate::KFileWidgetDockTitleBar(m_placesDock));
  
      m_placesView = new KFilePlacesView(m_placesDock);
@@ -2100,7 +2234,7 @@ index 86abbf2..0af1966 100644
  
      m_placesView->setObjectName(QStringLiteral("url bar"));
      QObject::connect(m_placesView, &KFilePlacesView::urlChanged, q, [this](const QUrl &url) {
-@@ -1503,11 +1888,12 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1503,11 +2022,12 @@ void KFileWidgetPrivate::initPlacesPanel()
      // TODO: KDE5 ### REMOVE THIS when KDirOperator's initial URL (in the c'tor) is gone.
      m_placesView->setUrl(m_url);
  
@@ -2115,7 +2249,7 @@ index 86abbf2..0af1966 100644
  
      // Needed for when the dialog is shown with the places panel initially hidden
      setPlacesViewSplitterSizes();
-@@ -1614,6 +2000,667 @@ void KFileWidgetPrivate::initGUI()
+@@ -1614,6 +2134,663 @@ void KFileWidgetPrivate::initGUI()
      updateTabOrder();
  }
  
@@ -2228,20 +2362,19 @@ index 86abbf2..0af1966 100644
 +// kio-ng: the bar of Dialog NG -------------------------------------------------------------------------------------
 +QWidget *KFileWidgetPrivate::ngBar(QWidget *parent)
 +{
++    // one strip of glass: the kinds of file present as chips (or, when they do not fit, the filters button and its
++    // menu), then the sorting, the view and the groups, the last two as icons
 +    auto *bar = new QWidget(parent);
-+    auto *rows = new QVBoxLayout(bar);
-+    rows->setContentsMargins(8, 2, 8, 6);
-+    rows->setSpacing(2);
-+    auto *layout = new QHBoxLayout();
-+    layout->setContentsMargins(0, 0, 0, 0);
-+    layout->setSpacing(4);
-+    rows->addLayout(layout);
-+    m_ngChipsRow = new QHBoxLayout();
-+    m_ngChipsRow->setContentsMargins(0, 0, 0, 0);
-+    rows->addLayout(m_ngChipsRow);
++    auto *outer = new QHBoxLayout(bar);
++    outer->setContentsMargins(8, 2, 8, 6);
++    auto *strip = new NgStrip(bar);
++    outer->addWidget(strip);
++    auto *layout = new QHBoxLayout(strip);
++    layout->setContentsMargins(4, 3, 4, 3);
++    layout->setSpacing(2);
 +    m_ngBarRow = layout;
 +    auto button = [&](const char *icon) {
-+        auto *b = new QToolButton(bar);
++        auto *b = new QToolButton(strip);
 +        b->setAutoRaise(true);
 +        b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 +        b->setIcon(QIcon::fromTheme(QString::fromLatin1(icon)));
@@ -2270,34 +2403,31 @@ index 86abbf2..0af1966 100644
 +            b->setStyleSheet(sheet);
 +        }
 +    }
-+    // the filters: the kinds present as chips when there is room, otherwise the button with its menu
-+    layout->removeWidget(m_ngFiltersButton);
-+    layout->addWidget(m_ngFiltersButton);
-+    m_ngChips = new QWidget(bar);
++    // the order in the strip: the kinds (or the filters button), room, a divider, sorting, view, groups
++    for (QToolButton *b : {m_ngSortButton, m_ngViewButton, m_ngFiltersButton, m_ngGroupsButton}) {
++        layout->removeWidget(b);
++    }
++    m_ngChips = new QWidget(strip);
 +    auto *chipLayout = new QHBoxLayout(m_ngChips);
-+    chipLayout->setContentsMargins(10, 0, 0, 0);
++    chipLayout->setContentsMargins(0, 0, 0, 0);
 +    chipLayout->setSpacing(2);
 +    layout->addWidget(m_ngChips);
++    layout->addWidget(m_ngFiltersButton);
 +    layout->addStretch(1);
-+    m_ngChipsRow->addStretch(1);
++    auto *divider = new QWidget(strip);
++    divider->setFixedSize(1, 18);
 +    {
-+        const QColor ink = bar->palette().color(QPalette::WindowText);
-+        m_ngChips->setStyleSheet(QStringLiteral("QToolButton { border: none; border-radius: 12px; padding: 3px 10px; }"
-+                                                "QToolButton:hover { background: rgba(%1, %2, %3, 0.08); }"
-+                                                "QToolButton:checked { background: rgba(%1, %2, %3, 0.16); }")
-+                                     .arg(ink.red())
-+                                     .arg(ink.green())
-+                                     .arg(ink.blue()));
-+        if (NgLook::aurora()) {
-+            const QColor accent = NgLook::selection(bar->palette());
-+            m_ngChips->setStyleSheet(m_ngChips->styleSheet()
-+                                     + QStringLiteral("QToolButton:checked { background: rgba(%1, %2, %3, %4);%5 }")
-+                                           .arg(accent.red())
-+                                           .arg(accent.green())
-+                                           .arg(accent.blue())
-+                                           .arg(QString::number(accent.alphaF(), 'f', 2), NgLook::fullSelection() ? QStringLiteral(" color: white;") : QString()));
-+        }
++        QColor ink = strip->palette().color(QPalette::WindowText);
++        divider->setStyleSheet(QStringLiteral("background: rgba(%1, %2, %3, 0.14);").arg(ink.red()).arg(ink.green()).arg(ink.blue()));
 +    }
++    layout->addSpacing(4);
++    layout->addWidget(divider);
++    layout->addSpacing(4);
++    layout->addWidget(m_ngSortButton);
++    layout->addWidget(m_ngViewButton);
++    layout->addWidget(m_ngGroupsButton);
++    m_ngViewButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
++    m_ngGroupsButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
 +    struct Watcher : QObject {
 +        std::function<void()> resized;
 +        bool eventFilter(QObject *, QEvent *event) override
@@ -2313,7 +2443,7 @@ index 86abbf2..0af1966 100644
 +    watcher->resized = [this] {
 +        ngFitBar();
 +    };
-+    bar->installEventFilter(watcher);
++    strip->installEventFilter(watcher); // (the strip, not the bar: its width is the one that counts, set after the bar's)
 +
 +    // sort: KDirOperator's own actions
 +    QObject::connect(m_ngSortButton->menu(), &QMenu::aboutToShow, q, [this] {
@@ -2473,7 +2603,8 @@ index 86abbf2..0af1966 100644
 +    default:
 +        by = ngLabel(nullptr, nullptr, "Name", "Nome");
 +    }
-+    m_ngSortButton->setText(ngLabel(nullptr, nullptr, "Sort: %1", "Ordina: %1").arg(by));
++    m_ngSortButton->setText(by);
++    m_ngSortButton->setToolTip(ngLabel(nullptr, nullptr, "Sort: %1", "Ordina: %1").arg(by));
 +    m_ngSortButton->setIcon(QIcon::fromTheme((sorting & QDir::Reversed) ? QStringLiteral("view-sort-descending") : QStringLiteral("view-sort-ascending")));
 +
 +    const QString view = m_ngView == QLatin1String("compact") ? ngLabel(nullptr, nullptr, "Compact rows", "Righe compatte")
@@ -2481,6 +2612,7 @@ index 86abbf2..0af1966 100644
 +        : m_ngView == QLatin1String("icons")                  ? ngLabel(nullptr, nullptr, "Icons", "Icone")
 +                                                              : ngLabel(nullptr, nullptr, "Rows", "Righe");
 +    m_ngViewButton->setText(view);
++    m_ngViewButton->setToolTip(ngLabel(nullptr, nullptr, "View: %1", "Vista: %1").arg(view));
 +    m_ngViewButton->setIcon(QIcon::fromTheme(m_ngView == QLatin1String("icons") ? QStringLiteral("view-list-icons") : QStringLiteral("view-list-details")));
 +
 +    const auto &kind = ngFilterKinds[qBound(0, m_ngFilter, ngFilterCount - 1)];
@@ -2489,6 +2621,7 @@ index 86abbf2..0af1966 100644
 +    const bool rows = m_ngView == QLatin1String("rows") || m_ngView == QLatin1String("compact");
 +    m_ngGroupsButton->setText(ngLabel(nullptr, nullptr, "Groups: %1", "Gruppi: %1")
 +                                  .arg(m_ops->property("_ng_groups").toBool() && rows ? by : ngLabel(nullptr, nullptr, "none", "nessuno")));
++    m_ngGroupsButton->setToolTip(m_ngGroupsButton->text());
 +}
 +
 +void KFileWidgetPrivate::ngFillChips()
@@ -2507,14 +2640,11 @@ index 86abbf2..0af1966 100644
 +        if (kind != 0 && count == 0 && kind != m_ngFilter) {
 +            continue;
 +        }
-+        auto *chip = new QToolButton(m_ngChips);
-+        chip->setAutoRaise(true);
-+        chip->setCheckable(true);
-+        chip->setChecked(kind == m_ngFilter);
-+        chip->setToolButtonStyle(Qt::ToolButtonTextOnly);
 +        const QString label = kind == 0 ? ngLabel(nullptr, nullptr, "All", "Tutti")
 +                                        : ngLabel(ngFilterKinds[kind].domain, ngFilterKinds[kind].context, ngFilterKinds[kind].label, ngFilterKinds[kind].labelIt);
-+        chip->setText(QStringLiteral("%1  %2").arg(label).arg(count));
++        // "All" without an icon; every kind with its own, in its colour, as in the sidebar
++        auto *chip = new NgChip(kind == 0 ? QIcon() : QIcon::fromTheme(QString::fromLatin1(ngFilterKinds[kind].icon)), label, count, m_ngChips);
++        chip->setChecked(kind == m_ngFilter);
 +        QObject::connect(chip, &QToolButton::clicked, q, [this, kind] {
 +            ngSetFilter(kind);
 +        });
@@ -2526,28 +2656,28 @@ index 86abbf2..0af1966 100644
 +
 +void KFileWidgetPrivate::ngFitBar()
 +{
-+    // the chips need the room they ask for, beside the other buttons; when it is not there, the menu button stands
-+    // for them
++    // the chips need the room they ask for, beside the sorting, view and groups; when it is not there, the filters
++    // button and its menu stand for them
 +    if (!m_ngChips || !m_ngFiltersButton) {
 +        return;
 +    }
-+    QWidget *bar = m_ngChips->parentWidget();
-+    const int width = bar->width() - 16;
-+    const int fixed = m_ngSortButton->sizeHint().width() + m_ngViewButton->sizeHint().width() + m_ngGroupsButton->sizeHint().width() + 24;
-+    const int chips = m_ngChips->sizeHint().width();
-+    // beside the buttons; else on a row of their own; else the button and its menu
-+    const bool inline_ = fixed + chips <= width;
-+    const bool ownRow = !inline_ && chips <= width;
-+    if (inline_ && m_ngBarRow->indexOf(m_ngChips) < 0) {
-+        m_ngChipsRow->removeWidget(m_ngChips);
-+        m_ngBarRow->insertWidget(m_ngBarRow->count() - 1, m_ngChips);
-+    } else if (ownRow && m_ngChipsRow->indexOf(m_ngChips) < 0) {
-+        m_ngBarRow->removeWidget(m_ngChips);
-+        m_ngChipsRow->insertWidget(0, m_ngChips);
++    QWidget *strip = m_ngChips->parentWidget();
++    const int fixed = m_ngSortButton->sizeHint().width() + m_ngViewButton->sizeHint().width() + m_ngGroupsButton->sizeHint().width() + 8 + 9 + 12 + 24;
++    // first with their names, then with only their icons, then the button
++    const auto chips = m_ngChips->findChildren<QAbstractButton *>(Qt::FindDirectChildrenOnly); // (all of them NgChips)
++    bool fits = false;
++    for (const bool compact : {false, true}) {
++        for (QAbstractButton *chip : chips) {
++            static_cast<NgChip *>(chip)->setCompact(compact);
++        }
++        m_ngChips->layout()->invalidate();
++        fits = m_ngChips->layout()->sizeHint().width() + fixed <= strip->width();
++        if (fits) {
++            break;
++        }
 +    }
-+    m_ngChips->layout()->setContentsMargins(inline_ ? 10 : 0, 0, 0, 0);
-+    m_ngChips->setVisible(inline_ || ownRow);
-+    m_ngFiltersButton->setVisible(!inline_ && !ownRow);
++    m_ngChips->setVisible(fits);
++    m_ngFiltersButton->setVisible(!fits);
 +}
 +
 +void KFileWidgetPrivate::ngSetSortCreated(bool created)
@@ -2783,7 +2913,7 @@ index 86abbf2..0af1966 100644
  void KFileWidgetPrivate::slotFileFilterChanged()
  {
      m_filterDelayTimer.stop();
-@@ -2012,7 +3059,8 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2012,7 +3189,8 @@ void KFileWidget::showEvent(QShowEvent *event)
      if (!d->m_hasView) { // delayed view-creation
          Q_ASSERT(d);
          Q_ASSERT(d->m_ops);
@@ -2793,7 +2923,7 @@ index 86abbf2..0af1966 100644
          d->m_hasView = true;
  
          connect(d->m_ops->view(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
-@@ -2022,6 +3070,9 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2022,6 +3200,9 @@ void KFileWidget::showEvent(QShowEvent *event)
      d->m_ops->clearHistory();
  
      QWidget::showEvent(event);
@@ -2803,7 +2933,7 @@ index 86abbf2..0af1966 100644
  }
  
  bool KFileWidget::eventFilter(QObject *watched, QEvent *event)
-@@ -2087,6 +3138,24 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2087,6 +3268,24 @@ void KFileWidgetPrivate::readViewConfig()
      m_ops->setViewConfig(m_configGroup);
      m_ops->readConfig(m_configGroup);
  
@@ -2828,7 +2958,7 @@ index 86abbf2..0af1966 100644
      // Show or don't show the places panel
      togglePlacesPanel(m_configGroup.readEntry(ShowSpeedbar, true));
  
-@@ -2095,7 +3164,7 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2095,7 +3294,7 @@ void KFileWidgetPrivate::readViewConfig()
      updateAutoSelectExtension();
  
      // should the URL navigator use the breadcrumb navigation?
