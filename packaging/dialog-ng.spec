@@ -1,8 +1,15 @@
 # SPDX-License-Identifier: MIT
-%global commit      973ed26cd3032af3a86cdcab4048457a4d9500f5
+%global commit      d26d2ccf146ad4401953b86dccf24e04109e7c80
 %global shortcommit %(c=%{commit}; echo ${c:0:7})
-%global snapdate    202611122309
+%global snapdate    202611161152
+# built from the KIO release each Fedora ships: the patched library must match the installed one
+%if 0%{?fedora} >= 45
+%global kio         6.32.0
+%global kiosource   2
+%else
 %global kio         6.31.0
+%global kiosource   0
+%endif
 %global ngprefix    /opt/ng/dialog-ng
 
 Name:           dialog-ng
@@ -12,8 +19,9 @@ Summary:        KDE's file dialog with quick filters and Dolphin NG's look
 # the library is KIO's, patched: KIO's licences; the packaging is MIT
 License:        LGPL-2.0-or-later AND LGPL-2.1-or-later AND LGPL-2.0-only AND LGPL-2.1-only AND LGPL-3.0-only AND (LGPL-2.1-only OR LGPL-3.0-only) AND GPL-2.0-or-later AND BSD-2-Clause AND BSD-3-Clause AND CC0-1.0 AND MIT
 URL:            https://github.com/Morzilla/dialog-ng
-Source0:        https://download.kde.org/stable/frameworks/%(echo %{kio} | cut -d. -f1-2)/kio-%{kio}.tar.xz
+Source0:        https://download.kde.org/stable/frameworks/6.31/kio-6.31.0.tar.xz
 Source1:        https://raw.githubusercontent.com/Morzilla/dialog-ng/%{commit}/dialog-ng.patch
+Source2:        https://download.kde.org/stable/frameworks/6.32/kio-6.32.0.tar.xz
 
 BuildRequires:  cmake
 BuildRequires:  extra-cmake-modules >= %{kio}
@@ -73,7 +81,7 @@ KDE Frameworks the stock dialog comes back until this package is rebuilt.
 Log out and in once after installing.
 
 %prep
-%autosetup -n kio-%{kio} -N
+%setup -q -T -b %{kiosource} -n kio-%{kio}
 patch -p1 --no-backup-if-mismatch < %{SOURCE1}
 # the help worker is not needed for the dialog
 sed -i 's/^add_subdirectory( help )/# add_subdirectory( help )/' src/kioworkers/CMakeLists.txt
@@ -106,5 +114,8 @@ EOT
 %config(noreplace) %{_sysconfdir}/xdg/plasma-workspace/env/dialog-ng.sh
 
 %changelog
+* Mon Nov 16 2026 Morzilla <3956663+Morzilla@users.noreply.github.com> - 6.32.0^202611161152gitd26d2cc-1
+- Aurora port (light and dark), KIO 6.31 on Fedora 44 and 6.32 on Fedora 45
+
 * Sat Nov 14 2026 Morzilla <3956663+Morzilla@users.noreply.github.com> - 6.31.0^202611122309git973ed26-1
 - First package
