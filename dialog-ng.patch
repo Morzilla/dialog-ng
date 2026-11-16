@@ -62,7 +62,7 @@ index 40a009b..ad0ab7c 100644
      d->m_previewGenerator->setPreviewShown(previewShown);
      action(KDirOperator::ShowPreview)->setChecked(previewShown);
 diff --git a/src/filewidgets/kdiroperatordetailview.cpp b/src/filewidgets/kdiroperatordetailview.cpp
-index a927bc9..1cea200 100644
+index a927bc9..140d7e9 100644
 --- a/src/filewidgets/kdiroperatordetailview.cpp
 +++ b/src/filewidgets/kdiroperatordetailview.cpp
 @@ -6,6 +6,27 @@
@@ -394,7 +394,7 @@ index a927bc9..1cea200 100644
 +        // pale front, on either scheme
 +        const QColor highlight = QGuiApplication::palette().color(QPalette::Active, QPalette::Highlight);
 +        const qreal accentHue = highlight.hslHueF() < 0 ? 0.58 : highlight.hslHueF();
-+        const qreal accentSat = qBound(0.45, highlight.hslSaturationF() * 1.2, 0.90);
++        const qreal accentSat = (highlight.hslSaturationF() < 0.15 ? highlight.hslSaturationF() : qBound(0.45, highlight.hslSaturationF() * 1.2, 0.90));
 +        const QColor ink = QColor::fromHslF(accentHue, accentSat, dark ? 0.24 : 0.38); // (light schemes: a lighter tone, the accent itself more than a navy)
 +        const QColor ink2 = QColor::fromHslF(accentHue, accentSat * 0.9, dark ? 0.33 : 0.46);
 +        const qreal radius = qMin(width, height) * 0.09;
@@ -1220,7 +1220,7 @@ index a927bc9..1cea200 100644
 +
  #include "moc_kdiroperatordetailview_p.cpp"
 diff --git a/src/filewidgets/kdiroperatordetailview_p.h b/src/filewidgets/kdiroperatordetailview_p.h
-index d26ec19..a0ac49e 100644
+index d26ec19..a6d40b1 100644
 --- a/src/filewidgets/kdiroperatordetailview_p.h
 +++ b/src/filewidgets/kdiroperatordetailview_p.h
 @@ -8,10 +8,86 @@
@@ -1278,7 +1278,7 @@ index d26ec19..a0ac49e 100644
 +{
 +    const QColor highlight = QGuiApplication::palette().color(QPalette::Active, QPalette::Highlight);
 +    const qreal hue = highlight.hslHueF() < 0 ? 0.58 : highlight.hslHueF();
-+    const qreal saturation = qBound(0.55, highlight.hslSaturationF() * 1.3, 0.90);
++    const qreal saturation = (highlight.hslSaturationF() < 0.15 ? highlight.hslSaturationF() : qBound(0.55, highlight.hslSaturationF() * 1.3, 0.90));
 +    QColor colour = QColor::fromHslF(hue, saturation, palette.color(QPalette::Window).lightnessF() < 0.5 ? 0.66 : 0.52);
 +    colour.setAlphaF(alpha);
 +    return colour;
@@ -1431,7 +1431,7 @@ index 3e033cf..32c7cbe 100644
          const auto rightModifiedTime = rightFileItem.entry().numberValue(KIO::UDSEntry::UDS_MODIFICATION_TIME);
  
 diff --git a/src/filewidgets/kfileplacesview.cpp b/src/filewidgets/kfileplacesview.cpp
-index dc8f0f3..4bd406b 100644
+index dc8f0f3..68bb481 100644
 --- a/src/filewidgets/kfileplacesview.cpp
 +++ b/src/filewidgets/kfileplacesview.cpp
 @@ -16,6 +16,7 @@
@@ -1484,7 +1484,7 @@ index dc8f0f3..4bd406b 100644
 +            const QColor highlight = QGuiApplication::palette().color(QPalette::Active, QPalette::Highlight);
 +            const bool dark = QGuiApplication::palette().color(QPalette::Window).lightnessF() < 0.5;
 +            if (full || !dark) {
-+                const QColor onSelection = full ? QColor(255, 255, 255) : QColor::fromHslF(highlight.hslHueF() < 0 ? 0.58 : highlight.hslHueF(), qBound(0.55, highlight.hslSaturationF() * 1.3, 0.90), 0.38);
++                const QColor onSelection = full ? QColor(255, 255, 255) : QColor::fromHslF(highlight.hslHueF() < 0 ? 0.58 : highlight.hslHueF(), (highlight.hslSaturationF() < 0.15 ? highlight.hslSaturationF() : qBound(0.55, highlight.hslSaturationF() * 1.3, 0.90)), 0.38);
 +                QPainter tint(&pm);
 +                tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
 +                tint.fillRect(pm.rect(), onSelection);
