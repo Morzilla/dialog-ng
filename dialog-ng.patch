@@ -62,7 +62,7 @@ index 40a009b..ad0ab7c 100644
      d->m_previewGenerator->setPreviewShown(previewShown);
      action(KDirOperator::ShowPreview)->setChecked(previewShown);
 diff --git a/src/filewidgets/kdiroperatordetailview.cpp b/src/filewidgets/kdiroperatordetailview.cpp
-index a927bc9..a3195e2 100644
+index a927bc9..a2da892 100644
 --- a/src/filewidgets/kdiroperatordetailview.cpp
 +++ b/src/filewidgets/kdiroperatordetailview.cpp
 @@ -6,6 +6,27 @@
@@ -394,8 +394,8 @@ index a927bc9..a3195e2 100644
 +        const QColor highlight = QGuiApplication::palette().color(QPalette::Active, QPalette::Highlight);
 +        const qreal accentHue = highlight.hslHueF() < 0 ? 0.58 : highlight.hslHueF();
 +        const qreal accentSat = qBound(0.45, highlight.hslSaturationF() * 1.2, 0.90);
-+        const QColor ink = QColor::fromHslF(accentHue, accentSat, dark ? 0.24 : 0.26);
-+        const QColor ink2 = QColor::fromHslF(accentHue, accentSat * 0.9, dark ? 0.33 : 0.36);
++        const QColor ink = QColor::fromHslF(accentHue, accentSat, dark ? 0.24 : 0.38); // (light schemes: a lighter tone, the accent itself more than a navy)
++        const QColor ink2 = QColor::fromHslF(accentHue, accentSat * 0.9, dark ? 0.33 : 0.46);
 +        const qreal radius = qMin(width, height) * 0.09;
 +        const qreal tabDepth = height * 0.16;
 +        QPainterPath backShape;
