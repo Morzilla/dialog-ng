@@ -1589,7 +1589,7 @@ index dc8f0f3..68bb481 100644
          } else {
              q->setRowHidden(i, false);
 diff --git a/src/filewidgets/kfilewidget.cpp b/src/filewidgets/kfilewidget.cpp
-index 86abbf2..153366d 100644
+index 86abbf2..4fb373a 100644
 --- a/src/filewidgets/kfilewidget.cpp
 +++ b/src/filewidgets/kfilewidget.cpp
 @@ -64,6 +64,16 @@
@@ -1618,7 +1618,7 @@ index 86abbf2..153366d 100644
  
  #include <algorithm>
  #include <array>
-@@ -80,6 +92,405 @@
+@@ -80,6 +92,424 @@
  Q_DECLARE_LOGGING_CATEGORY(KIO_KFILEWIDGETS_FW)
  Q_LOGGING_CATEGORY(KIO_KFILEWIDGETS_FW, "kf.kio.kfilewidgets.kfilewidget", QtInfoMsg)
  
@@ -1657,7 +1657,26 @@ index 86abbf2..153366d 100644
 +        path.addRoundedRect(card, 14, 14);
 +        QColor window = palette().color(QPalette::Window);
 +        if (NgLook::aurora()) {
-+            // Aurora: the window is glass already (Breeze NG): the card is a veil on it, as Dolphin NG's sidebar
++            // Aurora: the window is glass already (Breeze NG): the card is a veil on it, as Dolphin NG's sidebar.
++            // With a sidebar opacity of its own (Breeze NG's setting) the window's glass under the card is thinned
++            // to it, or thickened with the window's colour, first
++            const KConfigGroup common = KSharedConfig::openConfig(QStringLiteral("breezengrc"))->group(QStringLiteral("Common"));
++            if (const int side = common.readEntry("AuroraSidebarOpacity", -1); side >= 0) {
++                const QString theme = KSharedConfig::openConfig(QStringLiteral("kwinrc"))->group(QStringLiteral("org.kde.kdecoration2")).readEntry("theme", QString());
++                const bool lightGlass = theme.endsWith(QLatin1String("Light"), Qt::CaseInsensitive) && dark;
++                const qreal windowAlpha = qBound(10, common.readEntry("AuroraBodyOpacity", 60) - (lightGlass ? 22 : 0), 100) / 100.0;
++                const qreal wanted = qBound(0, side, 100) / 100.0;
++                painter.save();
++                if (wanted < windowAlpha) {
++                    painter.setCompositionMode(QPainter::CompositionMode_DestinationOut);
++                    painter.fillPath(path, QColor::fromRgbF(0, 0, 0, 1.0 - wanted / windowAlpha));
++                } else {
++                    QColor thicker = window;
++                    thicker.setAlphaF((wanted - windowAlpha) / (1.0 - windowAlpha + 1e-6));
++                    painter.fillPath(path, thicker);
++                }
++                painter.restore();
++            }
 +            painter.fillPath(path, NgLook::veil(dark, false));
 +            if (!dark) {
 +                painter.setPen(QPen(QColor(255, 255, 255, 140), 1)); // frost has a bright hairline edge
@@ -2024,7 +2043,7 @@ index 86abbf2..153366d 100644
  class KFileWidgetPrivate
  {
  public:
-@@ -224,6 +635,39 @@ public:
+@@ -224,6 +654,39 @@ public:
      QWidget *m_opsWidget = nullptr;
      QVBoxLayout *m_opsWidgetLayout = nullptr;
  
@@ -2064,7 +2083,7 @@ index 86abbf2..153366d 100644
      QLabel *m_filterLabel = nullptr;
      KUrlNavigator *m_urlNavigator = nullptr;
      KMessageWidget *m_messageWidget = nullptr;
-@@ -358,6 +802,18 @@ KFileWidget::KFileWidget(const QUrl &_startDir, QWidget *parent)
+@@ -358,6 +821,18 @@ KFileWidget::KFileWidget(const QUrl &_startDir, QWidget *parent)
      : QWidget(parent)
      , d(new KFileWidgetPrivate(this))
  {
@@ -2083,7 +2102,7 @@ index 86abbf2..153366d 100644
      QUrl startDir(_startDir);
      // qDebug() << "startDir" << startDir;
      QString filename;
-@@ -1087,10 +1543,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
+@@ -1087,10 +1562,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
      const auto navWidget = new QWidget(m_opsWidget);
      const auto navLayout = new QHBoxLayout(navWidget);
      navLayout->addWidget(m_urlNavigator);
@@ -2096,7 +2115,7 @@ index 86abbf2..153366d 100644
  
      m_messageWidget = new KMessageWidget(q);
      m_messageWidget->setMessageType(KMessageWidget::Error);
-@@ -1146,9 +1600,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
+@@ -1146,9 +1619,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
      initToolbar();
  
      m_opsWidgetLayout->addWidget(m_toolbar);
@@ -2109,7 +2128,7 @@ index 86abbf2..153366d 100644
      m_opsWidgetLayout->addWidget(m_ops);
      m_opsWidgetLayout->addWidget(bottomSparator);
  }
-@@ -1277,32 +1733,72 @@ void KFileWidgetPrivate::initToolbar()
+@@ -1277,32 +1752,72 @@ void KFileWidgetPrivate::initToolbar()
      });
      m_bookmarkButton->setMenu(m_bookmarkHandler->menu());
  
@@ -2202,7 +2221,7 @@ index 86abbf2..153366d 100644
  
      m_toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
      m_toolbar->setMovable(false);
-@@ -1484,8 +1980,31 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1484,8 +1999,31 @@ void KFileWidgetPrivate::initPlacesPanel()
      m_placesDock->setTitleBarWidget(new KDEPrivate::KFileWidgetDockTitleBar(m_placesDock));
  
      m_placesView = new KFilePlacesView(m_placesDock);
@@ -2234,7 +2253,7 @@ index 86abbf2..153366d 100644
  
      m_placesView->setObjectName(QStringLiteral("url bar"));
      QObject::connect(m_placesView, &KFilePlacesView::urlChanged, q, [this](const QUrl &url) {
-@@ -1503,11 +2022,12 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1503,11 +2041,12 @@ void KFileWidgetPrivate::initPlacesPanel()
      // TODO: KDE5 ### REMOVE THIS when KDirOperator's initial URL (in the c'tor) is gone.
      m_placesView->setUrl(m_url);
  
@@ -2249,7 +2268,7 @@ index 86abbf2..153366d 100644
  
      // Needed for when the dialog is shown with the places panel initially hidden
      setPlacesViewSplitterSizes();
-@@ -1614,6 +2134,663 @@ void KFileWidgetPrivate::initGUI()
+@@ -1614,6 +2153,663 @@ void KFileWidgetPrivate::initGUI()
      updateTabOrder();
  }
  
@@ -2913,7 +2932,7 @@ index 86abbf2..153366d 100644
  void KFileWidgetPrivate::slotFileFilterChanged()
  {
      m_filterDelayTimer.stop();
-@@ -2012,7 +3189,8 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2012,7 +3208,8 @@ void KFileWidget::showEvent(QShowEvent *event)
      if (!d->m_hasView) { // delayed view-creation
          Q_ASSERT(d);
          Q_ASSERT(d->m_ops);
@@ -2923,7 +2942,7 @@ index 86abbf2..153366d 100644
          d->m_hasView = true;
  
          connect(d->m_ops->view(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
-@@ -2022,6 +3200,9 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2022,6 +3219,9 @@ void KFileWidget::showEvent(QShowEvent *event)
      d->m_ops->clearHistory();
  
      QWidget::showEvent(event);
@@ -2933,7 +2952,7 @@ index 86abbf2..153366d 100644
  }
  
  bool KFileWidget::eventFilter(QObject *watched, QEvent *event)
-@@ -2087,6 +3268,24 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2087,6 +3287,24 @@ void KFileWidgetPrivate::readViewConfig()
      m_ops->setViewConfig(m_configGroup);
      m_ops->readConfig(m_configGroup);
  
@@ -2958,7 +2977,7 @@ index 86abbf2..153366d 100644
      // Show or don't show the places panel
      togglePlacesPanel(m_configGroup.readEntry(ShowSpeedbar, true));
  
-@@ -2095,7 +3294,7 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2095,7 +3313,7 @@ void KFileWidgetPrivate::readViewConfig()
      updateAutoSelectExtension();
  
      // should the URL navigator use the breadcrumb navigation?
