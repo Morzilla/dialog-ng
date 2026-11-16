@@ -2967,3 +2967,42 @@ index 86abbf2..153366d 100644
  
      // should the URL navigator show the full path?
      m_urlNavigator->setShowFullPath(m_configGroup.readEntry(ShowFullPath, false));
+diff --git a/src/filewidgets/kurlnavigatorbuttonbase.cpp b/src/filewidgets/kurlnavigatorbuttonbase.cpp
+index fe1f0c3..21f96a3 100644
+--- a/src/filewidgets/kurlnavigatorbuttonbase.cpp
++++ b/src/filewidgets/kurlnavigatorbuttonbase.cpp
+@@ -10,6 +10,7 @@ SPDX-License-Identifier: LGPL-2.0-or-later
+ #include <KLocalizedString>
+ #include <KUrlNavigator>
+ 
++#include <QCursor>
+ #include <QStyle>
+ #include <QStyleOptionViewItem>
+ 
+@@ -86,9 +87,16 @@ void KUrlNavigatorButtonBase::leaveEvent(QEvent *event)
+     update();
+ }
+ 
++// kio-ng: the pointer can leave a button without a Leave event (a popup opened from it took the pointer, on Wayland),
++// and the button stayed highlighted: "entered" counts only while the pointer is really over it, or it has the focus
++static bool ngEntered(const KUrlNavigatorButtonBase *button)
++{
++    return button->hasFocus() || button->rect().contains(button->mapFromGlobal(QCursor::pos()));
++}
++
+ void KUrlNavigatorButtonBase::drawHoverBackground(QPainter *painter)
+ {
+-    const bool isHighlighted = isDisplayHintEnabled(EnteredHint) || isDisplayHintEnabled(DraggedHint) || isDisplayHintEnabled(PopupActiveHint);
++    const bool isHighlighted = (isDisplayHintEnabled(EnteredHint) && ngEntered(this)) || isDisplayHintEnabled(DraggedHint) || isDisplayHintEnabled(PopupActiveHint);
+ 
+     QStyleOptionButton buttonOption;
+     buttonOption.initFrom(this);
+@@ -103,7 +111,7 @@ void KUrlNavigatorButtonBase::drawHoverBackground(QPainter *painter)
+ 
+ QColor KUrlNavigatorButtonBase::foregroundColor() const
+ {
+-    const bool isHighlighted = isDisplayHintEnabled(EnteredHint) || isDisplayHintEnabled(DraggedHint) || isDisplayHintEnabled(PopupActiveHint);
++    const bool isHighlighted = (isDisplayHintEnabled(EnteredHint) && ngEntered(this)) || isDisplayHintEnabled(DraggedHint) || isDisplayHintEnabled(PopupActiveHint);
+ 
+     QColor foregroundColor = palette().color(QPalette::ColorGroup::Normal, QPalette::Text);
+ 
