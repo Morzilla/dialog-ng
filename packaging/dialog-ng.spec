@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
-%global commit      d26d2ccf146ad4401953b86dccf24e04109e7c80
+%global commit      0a9c8279dcd77d78d4ceac775019f49cb1ffc90e
 %global shortcommit %(c=%{commit}; echo ${c:0:7})
-%global snapdate    202611161152
+%global snapdate    202611161433
 # built from the KIO release each Fedora ships: the patched library must match the installed one
 %if 0%{?fedora} >= 45
 %global kio         6.32.0
@@ -114,6 +114,9 @@ EOT
 %config(noreplace) %{_sysconfdir}/xdg/plasma-workspace/env/dialog-ng.sh
 
 %changelog
+* Mon Nov 16 2026 Morzilla <3956663+Morzilla@users.noreply.github.com> - 6.32.0^202611161433git0a9c827-1
+- The bar as one strip with the kinds of file as chips
+
 * Mon Nov 16 2026 Morzilla <3956663+Morzilla@users.noreply.github.com> - 6.32.0^202611161152gitd26d2cc-1
 - Aurora port (light and dark), KIO 6.31 on Fedora 44 and 6.32 on Fedora 45
 
