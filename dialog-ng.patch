@@ -62,7 +62,7 @@ index 40a009b..ad0ab7c 100644
      d->m_previewGenerator->setPreviewShown(previewShown);
      action(KDirOperator::ShowPreview)->setChecked(previewShown);
 diff --git a/src/filewidgets/kdiroperatordetailview.cpp b/src/filewidgets/kdiroperatordetailview.cpp
-index a927bc9..4d5a608 100644
+index a927bc9..039b320 100644
 --- a/src/filewidgets/kdiroperatordetailview.cpp
 +++ b/src/filewidgets/kdiroperatordetailview.cpp
 @@ -6,6 +6,27 @@
@@ -836,7 +836,7 @@ index a927bc9..4d5a608 100644
 +        const QRectF tile(cell.left() + (compact ? 6 : 8), cell.center().y() - tileSize.height() / 2, tileSize.width(), tileSize.height());
 +        NgKindInfo kind = ngKindFor(item.name(), item.isDir());
 +        if (item.isDir() && kind.category == 0) {
-+            kind.tint = QGuiApplication::palette().color(QPalette::Active, QPalette::Highlight); // a folder wears the accent, as in Dolphin NG
++            kind.tint = NgLook::accent(QGuiApplication::palette(), 1.0); // a folder wears the accent, vivid, as in Dolphin NG
 +        }
 +        int childCount = -1;
 +        if (item.isDir()) {
