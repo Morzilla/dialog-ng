@@ -1589,7 +1589,7 @@ index dc8f0f3..4bd406b 100644
          } else {
              q->setRowHidden(i, false);
 diff --git a/src/filewidgets/kfilewidget.cpp b/src/filewidgets/kfilewidget.cpp
-index 86abbf2..86630cc 100644
+index 86abbf2..0af1966 100644
 --- a/src/filewidgets/kfilewidget.cpp
 +++ b/src/filewidgets/kfilewidget.cpp
 @@ -64,6 +64,16 @@
@@ -2115,7 +2115,7 @@ index 86abbf2..86630cc 100644
  
      // Needed for when the dialog is shown with the places panel initially hidden
      setPlacesViewSplitterSizes();
-@@ -1614,6 +2000,651 @@ void KFileWidgetPrivate::initGUI()
+@@ -1614,6 +2000,667 @@ void KFileWidgetPrivate::initGUI()
      updateTabOrder();
  }
  
@@ -2254,6 +2254,22 @@ index 86abbf2..86630cc 100644
 +    m_ngViewButton = button("view-list-details");
 +    m_ngFiltersButton = button("view-filter");
 +    m_ngGroupsButton = button("view-group");
++    // the buttons of the bar as in Dolphin NG's sort bar: no frame at rest, a veil under the pointer, rounded; their
++    // arrow with some air after the text
++    {
++        const bool dark = ngDark(bar);
++        const QString ink = (dark || NgLook::aurora()) ? QStringLiteral("255, 255, 255") : QStringLiteral("0, 0, 0");
++        const qreal hover = NgLook::aurora() ? (dark ? 0.08 : 0.50) : 0.08;
++        const qreal down = NgLook::aurora() ? (dark ? 0.14 : 0.70) : 0.14;
++        const QString sheet = QStringLiteral("QToolButton { border: 1px solid transparent; border-radius: 6px; padding: 3px 7px; padding-right: 11px; background: transparent; }"
++                                             "QToolButton:hover { background: rgba(%1, %2); }"
++                                             "QToolButton:pressed, QToolButton:open { background: rgba(%1, %3); }"
++                                             "QToolButton::menu-indicator { subcontrol-origin: padding; subcontrol-position: right center; left: 0px; right: 4px; }")
++                                  .arg(ink, QString::number(hover, 'f', 2), QString::number(down, 'f', 2));
++        for (QToolButton *b : {m_ngSortButton, m_ngViewButton, m_ngFiltersButton, m_ngGroupsButton}) {
++            b->setStyleSheet(sheet);
++        }
++    }
 +    // the filters: the kinds present as chips when there is room, otherwise the button with its menu
 +    layout->removeWidget(m_ngFiltersButton);
 +    layout->addWidget(m_ngFiltersButton);
@@ -2767,7 +2783,7 @@ index 86abbf2..86630cc 100644
  void KFileWidgetPrivate::slotFileFilterChanged()
  {
      m_filterDelayTimer.stop();
-@@ -2012,7 +3043,8 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2012,7 +3059,8 @@ void KFileWidget::showEvent(QShowEvent *event)
      if (!d->m_hasView) { // delayed view-creation
          Q_ASSERT(d);
          Q_ASSERT(d->m_ops);
@@ -2777,7 +2793,7 @@ index 86abbf2..86630cc 100644
          d->m_hasView = true;
  
          connect(d->m_ops->view(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
-@@ -2022,6 +3054,9 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2022,6 +3070,9 @@ void KFileWidget::showEvent(QShowEvent *event)
      d->m_ops->clearHistory();
  
      QWidget::showEvent(event);
@@ -2787,7 +2803,7 @@ index 86abbf2..86630cc 100644
  }
  
  bool KFileWidget::eventFilter(QObject *watched, QEvent *event)
-@@ -2087,6 +3122,24 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2087,6 +3138,24 @@ void KFileWidgetPrivate::readViewConfig()
      m_ops->setViewConfig(m_configGroup);
      m_ops->readConfig(m_configGroup);
  
@@ -2812,7 +2828,7 @@ index 86abbf2..86630cc 100644
      // Show or don't show the places panel
      togglePlacesPanel(m_configGroup.readEntry(ShowSpeedbar, true));
  
-@@ -2095,7 +3148,7 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2095,7 +3164,7 @@ void KFileWidgetPrivate::readViewConfig()
      updateAutoSelectExtension();
  
      // should the URL navigator use the breadcrumb navigation?
