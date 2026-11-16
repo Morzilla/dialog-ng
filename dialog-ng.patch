@@ -62,7 +62,7 @@ index 40a009b..ad0ab7c 100644
      d->m_previewGenerator->setPreviewShown(previewShown);
      action(KDirOperator::ShowPreview)->setChecked(previewShown);
 diff --git a/src/filewidgets/kdiroperatordetailview.cpp b/src/filewidgets/kdiroperatordetailview.cpp
-index a927bc9..65ffcfe 100644
+index a927bc9..84e7526 100644
 --- a/src/filewidgets/kdiroperatordetailview.cpp
 +++ b/src/filewidgets/kdiroperatordetailview.cpp
 @@ -6,6 +6,27 @@
@@ -113,7 +113,7 @@ index a927bc9..65ffcfe 100644
      if (m_isEmblemClicked) {
          return;
      }
-@@ -158,4 +179,1093 @@ void KDirOperatorDetailView::currentChanged(const QModelIndex &current, const QM
+@@ -158,4 +179,1095 @@ void KDirOperatorDetailView::currentChanged(const QModelIndex &current, const QM
      QTreeView::currentChanged(current, previous);
  }
  
@@ -768,10 +768,12 @@ index a927bc9..65ffcfe 100644
 +        scaledOption.fontMetrics = QFontMetrics(scaledOption.font);
 +        const QStyleOptionViewItem &opt = scaledOption;
 +        const QPalette &pal = option.palette;
-+        const QColor fg = pal.color(QPalette::Text);
++        // (Aurora, selections in the full accent: white on it)
++        const bool ngFull = NgLook::aurora() && NgLook::fullSelection() && (option.state & QStyle::State_Selected);
++        const QColor fg = ngFull ? QColor(255, 255, 255) : pal.color(QPalette::Text);
 +        const bool dark = pal.color(QPalette::Base).lightnessF() < 0.5;
 +        QColor dim = fg;
-+        dim.setAlphaF(0.62);
++        dim.setAlphaF(ngFull ? 0.8 : 0.62);
 +
 +        painter->save();
 +        painter->setRenderHint(QPainter::Antialiasing);
@@ -799,7 +801,7 @@ index a927bc9..65ffcfe 100644
 +            ground = pal.color(QPalette::Highlight);
 +            ground.setAlphaF(dark ? 0.38 : 0.28);
 +            if (NgLook::aurora()) {
-+                ground = NgLook::accent(pal, 0.34); // the accent of everything selected in Aurora
++                ground = NgLook::selection(pal); // the accent of everything selected in Aurora
 +            }
 +        } else if (option.state & QStyle::State_MouseOver) {
 +            ground = fg;
@@ -1208,10 +1210,10 @@ index a927bc9..65ffcfe 100644
 +
  #include "moc_kdiroperatordetailview_p.cpp"
 diff --git a/src/filewidgets/kdiroperatordetailview_p.h b/src/filewidgets/kdiroperatordetailview_p.h
-index d26ec19..fbfd927 100644
+index d26ec19..a0ac49e 100644
 --- a/src/filewidgets/kdiroperatordetailview_p.h
 +++ b/src/filewidgets/kdiroperatordetailview_p.h
-@@ -8,10 +8,56 @@
+@@ -8,10 +8,86 @@
  #define KDIROPERATORDETAILVIEW_P_H
  
  #include <KDirOperator>
@@ -1250,9 +1252,17 @@ index d26ec19..fbfd927 100644
 +}
 +inline QColor veil(bool dark, bool button, qreal more = 0.0)
 +{
-+    QColor ink = dark ? QColor(255, 255, 255) : QColor(0, 0, 0);
-+    ink.setAlphaF(qMin(1.0, veilAlpha(dark, button) + more));
++    // light schemes: frost, white and denser (black ink on light glass read as grey), as Breeze NG's own veils
++    QColor ink(255, 255, 255);
++    ink.setAlphaF(dark ? qMin(1.0, veilAlpha(dark, button) + more) : qMin(0.92, veilAlpha(dark, button) * (button ? 10.5 : 8.8) + more * 3.0));
 +    return ink;
++}
++// what is selected or switched on: a light sheet of the accent, or the full accent with white text (Breeze NG's
++// setting AuroraFullSelection)
++inline bool fullSelection()
++{
++    static const bool full = KConfig(QStringLiteral("breezengrc"), KConfig::NoGlobals).group(QStringLiteral("Common")).readEntry("AuroraFullSelection", false);
++    return full;
 +}
 +inline QColor accent(const QPalette &palette, qreal alpha)
 +{
@@ -1263,12 +1273,34 @@ index d26ec19..fbfd927 100644
 +    colour.setAlphaF(alpha);
 +    return colour;
 +}
++inline QColor selectionText(const QPalette &palette)
++{
++    if (fullSelection()) {
++        return QColor(255, 255, 255);
++    }
++    if (palette.color(QPalette::Window).lightnessF() >= 0.5) {
++        float h, s, l;
++        accent(palette, 1.0).getHslF(&h, &s, &l);
++        return QColor::fromHslF(h, s, 0.38); // on a light sheet of the accent: the accent itself, deep enough to read
++    }
++    return palette.color(QPalette::WindowText);
++}
++inline QColor selection(const QPalette &palette, qreal more = 0.0)
++{
++    const bool dark = palette.color(QPalette::Window).lightnessF() < 0.5;
++    if (fullSelection()) {
++        float h, s, l;
++        accent(palette, 1.0).getHslF(&h, &s, &l);
++        return QColor::fromHslF(h, s, qBound(0.0, (dark ? 0.54 : 0.52) + more * 0.5, 1.0));
++    }
++    return accent(palette, qMin(1.0, (dark ? 0.34 : 0.22) + more));
++}
 +}
 +
  class QAbstractItemModel;
  
  /*!
-@@ -32,6 +78,19 @@ public:
+@@ -32,6 +108,19 @@ public:
       */
      virtual bool setViewMode(KFile::FileView viewMode);
  
@@ -1288,7 +1320,7 @@ index d26ec19..fbfd927 100644
  protected:
      void initViewItemOption(QStyleOptionViewItem *option) const override;
  
-@@ -41,11 +100,25 @@ protected:
+@@ -41,11 +130,25 @@ protected:
      void mouseMoveEvent(QMouseEvent *event) override;
      void mouseReleaseEvent(QMouseEvent *event) override;
      void currentChanged(const QModelIndex &current, const QModelIndex &previous) override;
@@ -1520,7 +1552,7 @@ index dc8f0f3..41d7ad3 100644
          } else {
              q->setRowHidden(i, false);
 diff --git a/src/filewidgets/kfilewidget.cpp b/src/filewidgets/kfilewidget.cpp
-index 86abbf2..2f8965b 100644
+index 86abbf2..1a291cd 100644
 --- a/src/filewidgets/kfilewidget.cpp
 +++ b/src/filewidgets/kfilewidget.cpp
 @@ -64,6 +64,16 @@
@@ -1549,7 +1581,7 @@ index 86abbf2..2f8965b 100644
  
  #include <algorithm>
  #include <array>
-@@ -80,6 +92,254 @@
+@@ -80,6 +92,255 @@
  Q_DECLARE_LOGGING_CATEGORY(KIO_KFILEWIDGETS_FW)
  Q_LOGGING_CATEGORY(KIO_KFILEWIDGETS_FW, "kf.kio.kfilewidgets.kfilewidget", QtInfoMsg)
  
@@ -1653,9 +1685,9 @@ index 86abbf2..2f8965b 100644
 +        const QFontMetrics fm(font());
 +        const QRectF pill(2, 6, fm.horizontalAdvance(m_text) + 18, fm.height() + 4);
 +        QColor ink = palette().color(QPalette::WindowText);
-+        ink.setAlphaF(NgLook::aurora() ? NgLook::veilAlpha(ngDark(this), true) : 0.12);
++        ink.setAlphaF(0.12);
 +        painter.setPen(Qt::NoPen);
-+        painter.setBrush(ink);
++        painter.setBrush(NgLook::aurora() ? NgLook::veil(ngDark(this), true) : ink);
 +        painter.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
 +        ink.setAlphaF(0.85);
 +        painter.setPen(ink);
@@ -1697,7 +1729,8 @@ index 86abbf2..2f8965b 100644
 +            QColor ground = ink;
 +            ground.setAlphaF(isChecked() ? 0.14 : 0.07);
 +            if (NgLook::aurora() && isChecked()) {
-+                ground = NgLook::accent(palette(), 0.34);
++                ground = NgLook::selection(palette());
++                ink = NgLook::selectionText(palette());
 +            }
 +            painter.setPen(Qt::NoPen);
 +            painter.setBrush(ground);
@@ -1804,7 +1837,7 @@ index 86abbf2..2f8965b 100644
  class KFileWidgetPrivate
  {
  public:
-@@ -224,6 +484,40 @@ public:
+@@ -224,6 +485,40 @@ public:
      QWidget *m_opsWidget = nullptr;
      QVBoxLayout *m_opsWidgetLayout = nullptr;
  
@@ -1845,7 +1878,7 @@ index 86abbf2..2f8965b 100644
      QLabel *m_filterLabel = nullptr;
      KUrlNavigator *m_urlNavigator = nullptr;
      KMessageWidget *m_messageWidget = nullptr;
-@@ -358,6 +652,18 @@ KFileWidget::KFileWidget(const QUrl &_startDir, QWidget *parent)
+@@ -358,6 +653,18 @@ KFileWidget::KFileWidget(const QUrl &_startDir, QWidget *parent)
      : QWidget(parent)
      , d(new KFileWidgetPrivate(this))
  {
@@ -1864,7 +1897,7 @@ index 86abbf2..2f8965b 100644
      QUrl startDir(_startDir);
      // qDebug() << "startDir" << startDir;
      QString filename;
-@@ -1087,10 +1393,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
+@@ -1087,10 +1394,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
      const auto navWidget = new QWidget(m_opsWidget);
      const auto navLayout = new QHBoxLayout(navWidget);
      navLayout->addWidget(m_urlNavigator);
@@ -1877,7 +1910,7 @@ index 86abbf2..2f8965b 100644
  
      m_messageWidget = new KMessageWidget(q);
      m_messageWidget->setMessageType(KMessageWidget::Error);
-@@ -1146,9 +1450,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
+@@ -1146,9 +1451,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
      initToolbar();
  
      m_opsWidgetLayout->addWidget(m_toolbar);
@@ -1890,7 +1923,7 @@ index 86abbf2..2f8965b 100644
      m_opsWidgetLayout->addWidget(m_ops);
      m_opsWidgetLayout->addWidget(bottomSparator);
  }
-@@ -1277,29 +1583,44 @@ void KFileWidgetPrivate::initToolbar()
+@@ -1277,29 +1584,44 @@ void KFileWidgetPrivate::initToolbar()
      });
      m_bookmarkButton->setMenu(m_bookmarkHandler->menu());
  
@@ -1924,8 +1957,8 @@ index 86abbf2..2f8965b 100644
 +    // back, forward and up as one pill of glass before the location bar, as tall as it: the row of Dolphin NG
 +    {
 +        const bool dark = ngDark(q);
-+        const QString ink = dark ? QStringLiteral("255, 255, 255") : QStringLiteral("0, 0, 0");
-+        const qreal veil = NgLook::aurora() ? NgLook::veilAlpha(dark, true) : 0.06;
++        const QString ink = (dark || NgLook::aurora()) ? QStringLiteral("255, 255, 255") : QStringLiteral("0, 0, 0");
++        const qreal veil = NgLook::aurora() ? NgLook::veil(dark, true).alphaF() : 0.06;
 +        const int height = m_urlNavigator->sizeHint().height() > 20 ? m_urlNavigator->sizeHint().height() : 34;
 +        const QList<QAction *> nav{m_ops->action(KDirOperator::Back), m_ops->action(KDirOperator::Forward), m_ops->action(KDirOperator::Up)};
 +        for (int i = 0; i < nav.size(); ++i) {
@@ -1955,7 +1988,7 @@ index 86abbf2..2f8965b 100644
  
      m_toolbar->addAction(m_ops->action(KDirOperator::NewFolder));
      m_toolbar->addAction(menu);
-@@ -1484,6 +1805,9 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1484,6 +1806,9 @@ void KFileWidgetPrivate::initPlacesPanel()
      m_placesDock->setTitleBarWidget(new KDEPrivate::KFileWidgetDockTitleBar(m_placesDock));
  
      m_placesView = new KFilePlacesView(m_placesDock);
@@ -1965,7 +1998,7 @@ index 86abbf2..2f8965b 100644
      m_placesView->setModel(m_model);
      m_placesView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
  
-@@ -1503,11 +1827,12 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1503,11 +1828,12 @@ void KFileWidgetPrivate::initPlacesPanel()
      // TODO: KDE5 ### REMOVE THIS when KDirOperator's initial URL (in the c'tor) is gone.
      m_placesView->setUrl(m_url);
  
@@ -1980,7 +2013,7 @@ index 86abbf2..2f8965b 100644
  
      // Needed for when the dialog is shown with the places panel initially hidden
      setPlacesViewSplitterSizes();
-@@ -1614,6 +1939,647 @@ void KFileWidgetPrivate::initGUI()
+@@ -1614,6 +1940,651 @@ void KFileWidgetPrivate::initGUI()
      updateTabOrder();
  }
  
@@ -2138,9 +2171,13 @@ index 86abbf2..2f8965b 100644
 +                                     .arg(ink.green())
 +                                     .arg(ink.blue()));
 +        if (NgLook::aurora()) {
-+            const QColor accent = NgLook::accent(bar->palette(), 1.0);
++            const QColor accent = NgLook::selection(bar->palette());
 +            m_ngChips->setStyleSheet(m_ngChips->styleSheet()
-+                                     + QStringLiteral("QToolButton:checked { background: rgba(%1, %2, %3, 0.34); }").arg(accent.red()).arg(accent.green()).arg(accent.blue()));
++                                     + QStringLiteral("QToolButton:checked { background: rgba(%1, %2, %3, %4);%5 }")
++                                           .arg(accent.red())
++                                           .arg(accent.green())
++                                           .arg(accent.blue())
++                                           .arg(QString::number(accent.alphaF(), 'f', 2), NgLook::fullSelection() ? QStringLiteral(" color: white;") : QString()));
 +        }
 +    }
 +    struct Watcher : QObject {
@@ -2628,7 +2665,7 @@ index 86abbf2..2f8965b 100644
  void KFileWidgetPrivate::slotFileFilterChanged()
  {
      m_filterDelayTimer.stop();
-@@ -2012,7 +2978,8 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2012,7 +2983,8 @@ void KFileWidget::showEvent(QShowEvent *event)
      if (!d->m_hasView) { // delayed view-creation
          Q_ASSERT(d);
          Q_ASSERT(d->m_ops);
@@ -2638,7 +2675,7 @@ index 86abbf2..2f8965b 100644
          d->m_hasView = true;
  
          connect(d->m_ops->view(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
-@@ -2022,6 +2989,9 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2022,6 +2994,9 @@ void KFileWidget::showEvent(QShowEvent *event)
      d->m_ops->clearHistory();
  
      QWidget::showEvent(event);
@@ -2648,7 +2685,7 @@ index 86abbf2..2f8965b 100644
  }
  
  bool KFileWidget::eventFilter(QObject *watched, QEvent *event)
-@@ -2087,6 +3057,24 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2087,6 +3062,24 @@ void KFileWidgetPrivate::readViewConfig()
      m_ops->setViewConfig(m_configGroup);
      m_ops->readConfig(m_configGroup);
  
@@ -2673,7 +2710,7 @@ index 86abbf2..2f8965b 100644
      // Show or don't show the places panel
      togglePlacesPanel(m_configGroup.readEntry(ShowSpeedbar, true));
  
-@@ -2095,7 +3083,7 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2095,7 +3088,7 @@ void KFileWidgetPrivate::readViewConfig()
      updateAutoSelectExtension();
  
      // should the URL navigator use the breadcrumb navigation?
