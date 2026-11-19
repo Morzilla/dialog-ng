@@ -52,7 +52,11 @@ file without pointing at it (for screenshots).
 - **Strings the user sees** in NG code: `ngLabel(domain, context, "English", "Italiano")`, which takes KDE's own
   translation when the words exist in a KDE catalogue.
 - **Colours come from the palette**; a nearly colourless accent stays neutral (see `NgLook`).
-- **Same look as Dolphin NG.** When Dolphin NG's rows or sidebar change, the dialog follows.
+- **Same look as Dolphin NG.** When Dolphin NG's rows or sidebar change, the dialog follows: what is selected or on
+  wears the accent with white or black text by its lightness, and the sidebar's selection and section titles should
+  be pills painted by the dialog, not the style's own rectangle (Dolphin NG does so, to match with stock Breeze too).
+- **Glass needs the compositor's blur.** Breeze NG sets the application property `_breeze_ng_bare_glass` a moment
+  after start when KWin has no blur (it cannot be known earlier): glass the dialog lays itself must then be solid.
 - Check dark and light schemes and Breeze NG's looks; report what you built and looked at.
 
 ## Commits and packages
