@@ -1,0 +1,39 @@
+#!/usr/bin/make -f
+# Dialog NG: KIO (the release the distribution ships) with dialog-ng's patch; only the file dialog library is built and
+# installed, apart from the system, and the Plasma session puts it first on the library path while its version matches
+# the installed KIO's.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+include /usr/share/dpkg/architecture.mk
+include /usr/share/dpkg/pkg-info.mk
+KIO = $(firstword $(subst +, ,$(DEB_VERSION_UPSTREAM)))
+NGLIB = /opt/ng/dialog-ng/lib/$(DEB_HOST_MULTIARCH)
+SYSLIB = /usr/lib/$(DEB_HOST_MULTIARCH)
+PKG = debian/dialog-ng
+
+%:
+	dh $@ --buildsystem=cmake
+
+override_dh_auto_configure:
+	dh_auto_configure -- -DBUILD_TESTING=OFF -DBUILD_DESIGNERPLUGIN=OFF -DCMAKE_SKIP_RPATH=ON -DBUILD_QCH=OFF
+
+override_dh_auto_build:
+	dh_auto_build -- KF6KIOFileWidgets
+
+override_dh_auto_install:
+	install -d $(PKG)$(NGLIB)
+	cp -a obj-$(DEB_HOST_GNU_TYPE)/bin/libKF6KIOFileWidgets.so.6 obj-$(DEB_HOST_GNU_TYPE)/bin/libKF6KIOFileWidgets.so.$(KIO) $(PKG)$(NGLIB)/
+	install -d $(PKG)/etc/xdg/plasma-workspace/env
+	printf '%s\n' \
+		'# Dialog NG: KDE'"'"'s file dialog with quick filters. Loaded only while it matches the installed KIO: after an' \
+		'# update of KDE Frameworks the stock library is used again until the dialog-ng package is rebuilt.' \
+		'ngdlg=$(NGLIB)' \
+		'if [ -e $(SYSLIB)/libKF6KIOFileWidgets.so.6 ] && [ -e "$$ngdlg/libKF6KIOFileWidgets.so.6" ] &&' \
+		'   [ "$$(basename "$$(readlink -f $(SYSLIB)/libKF6KIOFileWidgets.so.6)")" = "$$(basename "$$(readlink -f "$$ngdlg/libKF6KIOFileWidgets.so.6")")" ]; then' \
+		'    export LD_LIBRARY_PATH="$$ngdlg$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"' \
+		'fi' \
+		'unset ngdlg' > $(PKG)/etc/xdg/plasma-workspace/env/dialog-ng.sh
+
+# a replacement for the system's library, not one for other packages to link to
+override_dh_makeshlibs:
+
+override_dh_auto_test:

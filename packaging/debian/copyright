@@ -1,0 +1,12 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: kio (with the Dialog NG patch)
+Source: https://download.kde.org/stable/frameworks/ and https://github.com/Morzilla/dialog-ng
+
+Files: *
+Copyright: the KDE KIO authors (see the headers of the files)
+           2026 Morzilla (the Dialog NG changes)
+License: LGPL-2.0-or-later
+ The full text is in /usr/share/common-licenses/LGPL-2. The changes of Dialog
+ NG are under the licence of the files they change. Some KIO files carry other
+ compatible licences, named in their headers and given in full in LICENSES/ of
+ the source.

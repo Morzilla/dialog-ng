@@ -1,0 +1,54 @@
+Source: dialog-ng
+Section: kde
+Priority: optional
+Maintainer: Morzilla <3956663+Morzilla@users.noreply.github.com>
+Build-Depends: cmake (>= 3.16~),
+               debhelper-compat (= 13),
+               extra-cmake-modules,
+               gettext,
+               kded6-dev,
+               libacl1-dev,
+               libkf6archive-dev,
+               libkf6auth-dev,
+               libkf6bookmarks-dev,
+               libkf6colorscheme-dev,
+               libkf6completion-dev,
+               libkf6config-dev,
+               libkf6configwidgets-dev,
+               libkf6coreaddons-dev,
+               libkf6crash-dev,
+               libkf6dbusaddons-dev,
+               libkf6doctools-dev,
+               libkf6guiaddons-dev,
+               libkf6i18n-dev,
+               libkf6iconthemes-dev,
+               libkf6itemviews-dev,
+               libkf6jobwidgets-dev,
+               libkf6service-dev,
+               libkf6solid-dev,
+               libkf6wallet-dev,
+               libkf6widgetsaddons-dev,
+               libkf6windowsystem-dev,
+               libmount-dev [linux-any],
+               libxml2-dev,
+               libxslt1-dev,
+               qt6-5compat-dev,
+               qt6-base-dev,
+               qt6-tools-dev
+Standards-Version: 4.7.0
+Homepage: https://github.com/Morzilla/dialog-ng
+Rules-Requires-Root: no
+
+Package: dialog-ng
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}, libkf6kiofilewidgets6
+Description: KDE file dialog with quick filters, cards and the NG look
+ Dialog NG is KDE's open/save file dialog (from KIO) with the ideas of
+ Dolphin NG: quick filters by kind of file, a cleaner sidebar, sort and view
+ controls that match Dolphin NG.
+ .
+ It is KIO's file dialog library rebuilt with the Dialog NG changes, installed
+ under /opt/ng/dialog-ng and loaded by the Plasma session in place of the
+ stock one, only while it matches the installed KIO: after an update of KDE
+ Frameworks the stock dialog is used until this package is rebuilt. Takes
+ effect from the next login.
