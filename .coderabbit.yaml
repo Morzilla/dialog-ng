@@ -1,0 +1,28 @@
+# CodeRabbit: automatic review of pull requests (https://docs.coderabbit.ai/reference/configuration)
+language: en-US
+tone_instructions: "Plain, direct English. Point at real defects first; skip praise and style nits that do not matter."
+reviews:
+  profile: chill
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+  path_filters:
+    - "!screenshots/**"
+    - "!**/*.png"
+  path_instructions:
+    - path: "**/*.patch"
+      instructions: |
+        dialog-ng.patch (and packaging/kio-patches/kio-X.Y.Z.patch for older KIO releases) are patches to KDE
+        Frameworks' KIO file dialog (src/filewidgets). Review the added C++ as code: Qt object lifetime, behaviour
+        when the dialog is shown off screen by platform integration, and that the hunks still apply to the KIO
+        release they name. The library replaces the system's libKF6KIOFileWidgets for the whole session, so a crash
+        here breaks every application's file dialog.
+    - path: "packaging/**"
+      instructions: |
+        Fedora spec (COPR) and Debian packaging (PPA): only libKF6KIOFileWidgets is built and installed under
+        /opt/ng/dialog-ng, and a plasma-workspace env script puts it first on LD_LIBRARY_PATH only while its version
+        matches the installed KIO. Check that this version guard stays correct on both distributions.
