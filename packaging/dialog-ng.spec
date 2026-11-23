@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
-%global commit      1ff01847aeedda3f0cbbac72d7d3bd2eb30dead5
+%global commit      7f7ff362435f8272196da545dbc963edb7d040c4
 %global shortcommit %(c=%{commit}; echo ${c:0:7})
-%global snapdate    202611161905
+%global snapdate    202611231040
 # built from the KIO release each Fedora ships: the patched library must match the installed one
 %if 0%{?fedora} >= 45
 %global kio         6.32.0
@@ -114,6 +114,9 @@ EOT
 %config(noreplace) %{_sysconfdir}/xdg/plasma-workspace/env/dialog-ng.sh
 
 %changelog
+* Mon Nov 23 2026 Morzilla <3956663+Morzilla@users.noreply.github.com> - 6.32.0^202611231040git7f7ff36-1
+- New Folder button also when a dialog picks a folder through Open
+
 * Mon Nov 16 2026 Morzilla <3956663+Morzilla@users.noreply.github.com> - 6.32.0^202611161905git1ff0184-1
 - Aurora sidebar opacity, grey accent, breadcrumb hover
 
