@@ -1431,7 +1431,7 @@ index 3e033cf..32c7cbe 100644
          const auto rightModifiedTime = rightFileItem.entry().numberValue(KIO::UDSEntry::UDS_MODIFICATION_TIME);
  
 diff --git a/src/filewidgets/kfileplacesview.cpp b/src/filewidgets/kfileplacesview.cpp
-index dc8f0f3..68bb481 100644
+index dc8f0f3..edcd8e7 100644
 --- a/src/filewidgets/kfileplacesview.cpp
 +++ b/src/filewidgets/kfileplacesview.cpp
 @@ -16,6 +16,7 @@
@@ -1533,7 +1533,20 @@ index dc8f0f3..68bb481 100644
      painter->setPen(penColor);
      painter->drawText(textRect, Qt::AlignLeft | Qt::AlignBottom, option.fontMetrics.elidedText(category, Qt::ElideRight, textRect.width()));
      painter->restore();
-@@ -1830,7 +1879,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
+@@ -705,8 +754,10 @@ void KFilePlacesViewDelegate::paletteChange()
+ 
+ QColor KFilePlacesViewDelegate::textColor(const QStyleOption &option) const
+ {
+-    const QPalette::ColorGroup group = m_view->isActiveWindow() ? QPalette::Active : QPalette::Inactive;
+-    return option.palette.color(group, QPalette::WindowText);
++    // kio-ng: always the active text colour: the scheme's inactive effect faded the places to a grey that could hardly
++    // be read on the dialog's glass sidebar (as in Dolphin NG's sidebar)
++    Q_UNUSED(m_view)
++    return option.palette.color(QPalette::Active, QPalette::WindowText);
+ }
+ 
+ QColor KFilePlacesViewDelegate::baseColor(const QStyleOption &option) const
+@@ -1830,7 +1881,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
          return; // We've nothing to display anyway
      }
  
@@ -1543,7 +1556,7 @@ index dc8f0f3..68bb481 100644
      const int maxSize = 64;
      QFontMetrics fm = q->fontMetrics();
  
-@@ -1889,6 +1939,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
+@@ -1889,6 +1941,8 @@ void KFilePlacesViewPrivate::adaptItemSize()
          size = minSize;
      } else if (size > maxSize) {
          size = maxSize;
@@ -1552,7 +1565,7 @@ index dc8f0f3..68bb481 100644
      } else {
          // Make it a multiple of 16
          size &= ~0xf;
-@@ -1933,9 +1985,34 @@ void KFilePlacesViewPrivate::updateHiddenRows()
+@@ -1933,9 +1987,34 @@ void KFilePlacesViewPrivate::updateHiddenRows()
      int rowCount = placesModel->rowCount();
      QModelIndex current = placesModel->closestItem(m_currentUrl);
  
@@ -1589,7 +1602,7 @@ index dc8f0f3..68bb481 100644
          } else {
              q->setRowHidden(i, false);
 diff --git a/src/filewidgets/kfilewidget.cpp b/src/filewidgets/kfilewidget.cpp
-index 86abbf2..5e4e740 100644
+index 86abbf2..558d2dc 100644
 --- a/src/filewidgets/kfilewidget.cpp
 +++ b/src/filewidgets/kfilewidget.cpp
 @@ -64,6 +64,16 @@
@@ -1618,7 +1631,7 @@ index 86abbf2..5e4e740 100644
  
  #include <algorithm>
  #include <array>
-@@ -80,6 +92,424 @@
+@@ -80,6 +92,429 @@
  Q_DECLARE_LOGGING_CATEGORY(KIO_KFILEWIDGETS_FW)
  Q_LOGGING_CATEGORY(KIO_KFILEWIDGETS_FW, "kf.kio.kfilewidgets.kfilewidget", QtInfoMsg)
  
@@ -1690,6 +1703,11 @@ index 86abbf2..5e4e740 100644
 +            painter.setCompositionMode(QPainter::CompositionMode_Source);
 +            painter.fillPath(path, window);
 +            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
++            if (!dark) {
++                // a light scheme: frost over the blur, as Dolphin NG's sidebar (55 %): over a dark wallpaper the card was
++                // a grey-blue and the scheme's dark text on it could hardly be read
++                painter.fillPath(path, QColor(255, 255, 255, 140));
++            }
 +        } else {
 +            const QColor accent = palette().color(QPalette::Highlight);
 +            QLinearGradient gradient(card.topLeft(), card.bottomRight());
@@ -2043,7 +2061,7 @@ index 86abbf2..5e4e740 100644
  class KFileWidgetPrivate
  {
  public:
-@@ -224,6 +654,40 @@ public:
+@@ -224,6 +659,40 @@ public:
      QWidget *m_opsWidget = nullptr;
      QVBoxLayout *m_opsWidgetLayout = nullptr;
  
@@ -2084,7 +2102,7 @@ index 86abbf2..5e4e740 100644
      QLabel *m_filterLabel = nullptr;
      KUrlNavigator *m_urlNavigator = nullptr;
      KMessageWidget *m_messageWidget = nullptr;
-@@ -358,6 +822,18 @@ KFileWidget::KFileWidget(const QUrl &_startDir, QWidget *parent)
+@@ -358,6 +827,18 @@ KFileWidget::KFileWidget(const QUrl &_startDir, QWidget *parent)
      : QWidget(parent)
      , d(new KFileWidgetPrivate(this))
  {
@@ -2103,7 +2121,7 @@ index 86abbf2..5e4e740 100644
      QUrl startDir(_startDir);
      // qDebug() << "startDir" << startDir;
      QString filename;
-@@ -1087,10 +1563,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
+@@ -1087,10 +1568,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
      const auto navWidget = new QWidget(m_opsWidget);
      const auto navLayout = new QHBoxLayout(navWidget);
      navLayout->addWidget(m_urlNavigator);
@@ -2116,7 +2134,7 @@ index 86abbf2..5e4e740 100644
  
      m_messageWidget = new KMessageWidget(q);
      m_messageWidget->setMessageType(KMessageWidget::Error);
-@@ -1146,9 +1620,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
+@@ -1146,9 +1625,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
      initToolbar();
  
      m_opsWidgetLayout->addWidget(m_toolbar);
@@ -2129,7 +2147,7 @@ index 86abbf2..5e4e740 100644
      m_opsWidgetLayout->addWidget(m_ops);
      m_opsWidgetLayout->addWidget(bottomSparator);
  }
-@@ -1277,32 +1753,72 @@ void KFileWidgetPrivate::initToolbar()
+@@ -1277,32 +1758,72 @@ void KFileWidgetPrivate::initToolbar()
      });
      m_bookmarkButton->setMenu(m_bookmarkHandler->menu());
  
@@ -2222,7 +2240,7 @@ index 86abbf2..5e4e740 100644
  
      m_toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
      m_toolbar->setMovable(false);
-@@ -1484,8 +2000,31 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1484,8 +2005,31 @@ void KFileWidgetPrivate::initPlacesPanel()
      m_placesDock->setTitleBarWidget(new KDEPrivate::KFileWidgetDockTitleBar(m_placesDock));
  
      m_placesView = new KFilePlacesView(m_placesDock);
@@ -2254,7 +2272,7 @@ index 86abbf2..5e4e740 100644
  
      m_placesView->setObjectName(QStringLiteral("url bar"));
      QObject::connect(m_placesView, &KFilePlacesView::urlChanged, q, [this](const QUrl &url) {
-@@ -1503,11 +2042,12 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1503,11 +2047,12 @@ void KFileWidgetPrivate::initPlacesPanel()
      // TODO: KDE5 ### REMOVE THIS when KDirOperator's initial URL (in the c'tor) is gone.
      m_placesView->setUrl(m_url);
  
@@ -2269,7 +2287,7 @@ index 86abbf2..5e4e740 100644
  
      // Needed for when the dialog is shown with the places panel initially hidden
      setPlacesViewSplitterSizes();
-@@ -1614,6 +2154,663 @@ void KFileWidgetPrivate::initGUI()
+@@ -1614,6 +2159,663 @@ void KFileWidgetPrivate::initGUI()
      updateTabOrder();
  }
  
@@ -2933,7 +2951,7 @@ index 86abbf2..5e4e740 100644
  void KFileWidgetPrivate::slotFileFilterChanged()
  {
      m_filterDelayTimer.stop();
-@@ -2012,7 +3209,8 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2012,7 +3214,8 @@ void KFileWidget::showEvent(QShowEvent *event)
      if (!d->m_hasView) { // delayed view-creation
          Q_ASSERT(d);
          Q_ASSERT(d->m_ops);
@@ -2943,7 +2961,7 @@ index 86abbf2..5e4e740 100644
          d->m_hasView = true;
  
          connect(d->m_ops->view(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
-@@ -2022,6 +3220,9 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2022,6 +3225,9 @@ void KFileWidget::showEvent(QShowEvent *event)
      d->m_ops->clearHistory();
  
      QWidget::showEvent(event);
@@ -2953,7 +2971,7 @@ index 86abbf2..5e4e740 100644
  }
  
  bool KFileWidget::eventFilter(QObject *watched, QEvent *event)
-@@ -2058,6 +3259,7 @@ void KFileWidget::setMode(KFile::Modes m)
+@@ -2058,6 +3264,7 @@ void KFileWidget::setMode(KFile::Modes m)
      }
  
      d->updateAutoSelectExtension();
@@ -2961,7 +2979,7 @@ index 86abbf2..5e4e740 100644
      // Need to make sure we enable the okButton when expected to do so,
      // since it's possible we call setMode and setOperationMode in different order.
      if (d->currentDirSelectable()) {
-@@ -2087,6 +3289,24 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2087,6 +3294,24 @@ void KFileWidgetPrivate::readViewConfig()
      m_ops->setViewConfig(m_configGroup);
      m_ops->readConfig(m_configGroup);
  
@@ -2986,7 +3004,7 @@ index 86abbf2..5e4e740 100644
      // Show or don't show the places panel
      togglePlacesPanel(m_configGroup.readEntry(ShowSpeedbar, true));
  
-@@ -2095,7 +3315,7 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2095,7 +3320,7 @@ void KFileWidgetPrivate::readViewConfig()
      updateAutoSelectExtension();
  
      // should the URL navigator use the breadcrumb navigation?
@@ -2995,7 +3013,7 @@ index 86abbf2..5e4e740 100644
  
      // should the URL navigator show the full path?
      m_urlNavigator->setShowFullPath(m_configGroup.readEntry(ShowFullPath, false));
-@@ -2207,9 +3427,6 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2207,9 +3432,6 @@ void KFileWidget::setOperationMode(OperationMode mode)
          // don't use KStandardGuiItem::open() here which has trailing ellipsis!
          d->m_okButton->setText(i18n("&Open"));
          d->m_okButton->setIcon(QIcon::fromTheme(QStringLiteral("document-open")));
@@ -3005,7 +3023,7 @@ index 86abbf2..5e4e740 100644
      } else if (mode == Saving) {
          KGuiItem::assign(d->m_okButton, KStandardGuiItem::save());
          d->m_okButton->setEnabled(d->currentDirSelectable() || !d->m_locationEdit->lineEdit()->text().isEmpty());
-@@ -2217,6 +3434,7 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2217,6 +3439,7 @@ void KFileWidget::setOperationMode(OperationMode mode)
      } else {
          KGuiItem::assign(d->m_okButton, KStandardGuiItem::ok());
      }
@@ -3013,7 +3031,7 @@ index 86abbf2..5e4e740 100644
      d->updateLocationWhatsThis();
      d->updateAutoSelectExtension();
  
-@@ -2226,6 +3444,17 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2226,6 +3449,17 @@ void KFileWidget::setOperationMode(OperationMode mode)
      d->updateFilterText();
  }
  
