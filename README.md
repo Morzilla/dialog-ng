@@ -9,6 +9,15 @@ sudo dnf install dialog-ng
 
 Log out and in again to get the new dialog. The same repository has the rest of the NG desktop: `breeze-ng`, `dolphin-ng`, `dialog-ng`, `neoline-icons` ([project page](https://copr.fedorainfracloud.org/coprs/morzilla/desktop-ng/)).
 
+**Kubuntu 26.04: there are packages in a PPA too**:
+
+```
+sudo add-apt-repository ppa:mori-daniele/desktop-ng
+sudo apt install dialog-ng
+```
+
+The same PPA has `breeze-ng`, `dolphin-ng`, `dialog-ng` and `neoline-icons` ([project page](https://launchpad.net/~mori-daniele/+archive/ubuntu/desktop-ng)).
+
 KDE's file dialog — the one every KDE app opens to pick or save a file, and that Firefox, Chrome and
 Flatpak apps get through the desktop portal — with:
 
