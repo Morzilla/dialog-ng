@@ -1623,7 +1623,7 @@ index dc8f0f3..edcd8e7 100644
          } else {
              q->setRowHidden(i, false);
 diff --git a/src/filewidgets/kfilewidget.cpp b/src/filewidgets/kfilewidget.cpp
-index 86abbf2..ca26be7 100644
+index 86abbf2..e70dee7 100644
 --- a/src/filewidgets/kfilewidget.cpp
 +++ b/src/filewidgets/kfilewidget.cpp
 @@ -64,6 +64,16 @@
@@ -2326,7 +2326,7 @@ index 86abbf2..ca26be7 100644
  
      // Needed for when the dialog is shown with the places panel initially hidden
      setPlacesViewSplitterSizes();
-@@ -1614,6 +2174,663 @@ void KFileWidgetPrivate::initGUI()
+@@ -1614,6 +2174,670 @@ void KFileWidgetPrivate::initGUI()
      updateTabOrder();
  }
  
@@ -2680,9 +2680,16 @@ index 86abbf2..ca26be7 100644
 +    default:
 +        by = ngLabel(nullptr, nullptr, "Name", "Nome");
 +    }
++    // the list of what happened lately has one order, the latest first, whatever is chosen for folders: the button says
++    // so and offers nothing (it read "Name" over a list that was not by name)
++    const bool recent = m_ops->url().scheme() == QLatin1String("ngrecent");
++    if (recent) {
++        by = ngLabel(nullptr, nullptr, "Latest first", "Più recenti");
++    }
++    m_ngSortButton->setEnabled(!recent);
 +    m_ngSortButton->setText(by);
 +    m_ngSortButton->setToolTip(ngLabel(nullptr, nullptr, "Sort: %1", "Ordina: %1").arg(by));
-+    m_ngSortButton->setIcon(QIcon::fromTheme((sorting & QDir::Reversed) ? QStringLiteral("view-sort-descending") : QStringLiteral("view-sort-ascending")));
++    m_ngSortButton->setIcon(QIcon::fromTheme((recent || (sorting & QDir::Reversed)) ? QStringLiteral("view-sort-descending") : QStringLiteral("view-sort-ascending")));
 +
 +    const QString view = m_ngView == QLatin1String("compact") ? ngLabel(nullptr, nullptr, "Compact rows", "Righe compatte")
 +        : m_ngView == QLatin1String("details")                ? ngLabel(nullptr, nullptr, "Details", "Dettagli")
@@ -2990,7 +2997,7 @@ index 86abbf2..ca26be7 100644
  void KFileWidgetPrivate::slotFileFilterChanged()
  {
      m_filterDelayTimer.stop();
-@@ -1706,7 +2923,8 @@ void KFileWidgetPrivate::urlEntered(const QUrl &url)
+@@ -1706,8 +2930,10 @@ void KFileWidgetPrivate::urlEntered(const QUrl &url)
      }
  
      if (m_placesView) {
@@ -2998,9 +3005,11 @@ index 86abbf2..ca26be7 100644
 +        // (kio-ng: the list of what happened lately belongs to the place "Recent Files")
 +        m_placesView->setUrl(url.scheme() == QLatin1String("ngrecent") ? QUrl(QStringLiteral("recentlyused:/files")) : url);
      }
++    ngUpdateBar(); // (kio-ng: the sort button follows the place, see there)
  
      m_messageWidget->hide();
-@@ -2012,7 +3230,8 @@ void KFileWidget::showEvent(QShowEvent *event)
+ }
+@@ -2012,7 +3238,8 @@ void KFileWidget::showEvent(QShowEvent *event)
      if (!d->m_hasView) { // delayed view-creation
          Q_ASSERT(d);
          Q_ASSERT(d->m_ops);
@@ -3010,7 +3019,7 @@ index 86abbf2..ca26be7 100644
          d->m_hasView = true;
  
          connect(d->m_ops->view(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
-@@ -2022,6 +3241,9 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2022,6 +3249,9 @@ void KFileWidget::showEvent(QShowEvent *event)
      d->m_ops->clearHistory();
  
      QWidget::showEvent(event);
@@ -3020,7 +3029,7 @@ index 86abbf2..ca26be7 100644
  }
  
  bool KFileWidget::eventFilter(QObject *watched, QEvent *event)
-@@ -2058,6 +3280,7 @@ void KFileWidget::setMode(KFile::Modes m)
+@@ -2058,6 +3288,7 @@ void KFileWidget::setMode(KFile::Modes m)
      }
  
      d->updateAutoSelectExtension();
@@ -3028,7 +3037,7 @@ index 86abbf2..ca26be7 100644
      // Need to make sure we enable the okButton when expected to do so,
      // since it's possible we call setMode and setOperationMode in different order.
      if (d->currentDirSelectable()) {
-@@ -2087,6 +3310,24 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2087,6 +3318,24 @@ void KFileWidgetPrivate::readViewConfig()
      m_ops->setViewConfig(m_configGroup);
      m_ops->readConfig(m_configGroup);
  
@@ -3053,7 +3062,7 @@ index 86abbf2..ca26be7 100644
      // Show or don't show the places panel
      togglePlacesPanel(m_configGroup.readEntry(ShowSpeedbar, true));
  
-@@ -2095,7 +3336,7 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2095,7 +3344,7 @@ void KFileWidgetPrivate::readViewConfig()
      updateAutoSelectExtension();
  
      // should the URL navigator use the breadcrumb navigation?
@@ -3062,7 +3071,7 @@ index 86abbf2..ca26be7 100644
  
      // should the URL navigator show the full path?
      m_urlNavigator->setShowFullPath(m_configGroup.readEntry(ShowFullPath, false));
-@@ -2207,9 +3448,6 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2207,9 +3456,6 @@ void KFileWidget::setOperationMode(OperationMode mode)
          // don't use KStandardGuiItem::open() here which has trailing ellipsis!
          d->m_okButton->setText(i18n("&Open"));
          d->m_okButton->setIcon(QIcon::fromTheme(QStringLiteral("document-open")));
@@ -3072,7 +3081,7 @@ index 86abbf2..ca26be7 100644
      } else if (mode == Saving) {
          KGuiItem::assign(d->m_okButton, KStandardGuiItem::save());
          d->m_okButton->setEnabled(d->currentDirSelectable() || !d->m_locationEdit->lineEdit()->text().isEmpty());
-@@ -2217,6 +3455,7 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2217,6 +3463,7 @@ void KFileWidget::setOperationMode(OperationMode mode)
      } else {
          KGuiItem::assign(d->m_okButton, KStandardGuiItem::ok());
      }
@@ -3080,7 +3089,7 @@ index 86abbf2..ca26be7 100644
      d->updateLocationWhatsThis();
      d->updateAutoSelectExtension();
  
-@@ -2226,6 +3465,17 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2226,6 +3473,17 @@ void KFileWidget::setOperationMode(OperationMode mode)
      d->updateFilterText();
  }
  
