@@ -62,7 +62,7 @@ index 40a009b..ad0ab7c 100644
      d->m_previewGenerator->setPreviewShown(previewShown);
      action(KDirOperator::ShowPreview)->setChecked(previewShown);
 diff --git a/src/filewidgets/kdiroperatordetailview.cpp b/src/filewidgets/kdiroperatordetailview.cpp
-index a927bc9..fc76f3d 100644
+index a927bc9..8d01194 100644
 --- a/src/filewidgets/kdiroperatordetailview.cpp
 +++ b/src/filewidgets/kdiroperatordetailview.cpp
 @@ -6,6 +6,27 @@
@@ -194,7 +194,7 @@ index a927bc9..fc76f3d 100644
 +    switch (sorting & QDir::SortByMask) {
 +    case QDir::Time: {
 +        // (kio-ng: in the list of what happened lately, the day of the event)
-+        const QDateTime when = item.time(item.entry().contains(KIO::UDSEntry::UDS_EXTRA) ? KFileItem::AccessTime : created ? KFileItem::CreationTime : KFileItem::ModificationTime);
++        const QDateTime when = item.time(item.entry().stringValue(KIO::UDSEntry::UDS_EXTRA + 7) == QLatin1String("ngrecent") ? KFileItem::AccessTime : created ? KFileItem::CreationTime : KFileItem::ModificationTime);
 +        const qint64 days = when.isValid() ? when.date().daysTo(QDate::currentDate()) : 9999;
 +        if (days <= 0) {
 +            return ngTr("Today", "Oggi");
@@ -901,7 +901,7 @@ index a927bc9..fc76f3d 100644
 +        }
 +        // in the list of what happened lately (ngrecent:/) the line says what happened ("Downloaded from kde.org"), and
 +        // the date is the event's
-+        const QString happened = item.entry().contains(KIO::UDSEntry::UDS_EXTRA) ? item.entry().stringValue(KIO::UDSEntry::UDS_COMMENT) : QString();
++        const QString happened = item.entry().stringValue(KIO::UDSEntry::UDS_EXTRA + 7) == QLatin1String("ngrecent") ? item.entry().stringValue(KIO::UDSEntry::UDS_COMMENT) : QString();
 +        if (!happened.isEmpty()) {
 +            meta = happened + (item.isDir() ? QString() : QStringLiteral(" · ") + KIO::convertSize(item.size()));
 +        }
@@ -1368,7 +1368,7 @@ index d26ec19..a6d40b1 100644
  
  #endif
 diff --git a/src/filewidgets/kdirsortfilterproxymodel.cpp b/src/filewidgets/kdirsortfilterproxymodel.cpp
-index 3e033cf..98c5d30 100644
+index 3e033cf..6f2354c 100644
 --- a/src/filewidgets/kdirsortfilterproxymodel.cpp
 +++ b/src/filewidgets/kdirsortfilterproxymodel.cpp
 @@ -19,6 +19,37 @@
@@ -1409,13 +1409,14 @@ index 3e033cf..98c5d30 100644
  
  class Q_DECL_HIDDEN KDirSortFilterProxyModel::KDirSortFilterProxyModelPrivate
  {
-@@ -159,6 +190,25 @@ bool KDirSortFilterProxyModel::subSortLessThan(const QModelIndex &left, const QM
+@@ -159,6 +190,26 @@ bool KDirSortFilterProxyModel::subSortLessThan(const QModelIndex &left, const QM
  
      const bool isLessThan = (sortOrder() == Qt::AscendingOrder);
  
-+    // kio-ng: the list of what happened lately (ngrecent:/, entries with UDS_EXTRA): the latest first, whatever the
++    // kio-ng: the list of what happened lately (ngrecent:/, entries with its mark in UDS_EXTRA + 7; KDE's own recent
++    // files also fill UDS_EXTRA and keep the order chosen): the latest first, whatever the
 +    // order chosen for folders. Each entry's access time is when its event happened
-+    if (leftFileItem.entry().contains(KIO::UDSEntry::UDS_EXTRA) && rightFileItem.entry().contains(KIO::UDSEntry::UDS_EXTRA)) {
++    if (leftFileItem.entry().stringValue(KIO::UDSEntry::UDS_EXTRA + 7) == QLatin1String("ngrecent") && rightFileItem.entry().stringValue(KIO::UDSEntry::UDS_EXTRA + 7) == QLatin1String("ngrecent")) {
 +        const auto leftWhen = leftFileItem.entry().numberValue(KIO::UDSEntry::UDS_ACCESS_TIME);
 +        const auto rightWhen = rightFileItem.entry().numberValue(KIO::UDSEntry::UDS_ACCESS_TIME);
 +        if (leftWhen != rightWhen) {
@@ -1424,7 +1425,7 @@ index 3e033cf..98c5d30 100644
 +    }
 +
 +    // kio-ng: items pinned in Dolphin NG come first, whatever the order
-+    if (property("_ng_pinned_first").toBool() && !leftFileItem.entry().contains(KIO::UDSEntry::UDS_EXTRA)) {
++    if (property("_ng_pinned_first").toBool() && leftFileItem.entry().stringValue(KIO::UDSEntry::UDS_EXTRA + 7) != QLatin1String("ngrecent")) {
 +        const bool leftPinned = ngIsPinned(leftFileItem);
 +        const bool rightPinned = ngIsPinned(rightFileItem);
 +        if (leftPinned != rightPinned) {
@@ -1435,7 +1436,7 @@ index 3e033cf..98c5d30 100644
      // Show hidden files and folders last
      if (d->m_sortHiddenFilesLast) {
          const bool leftItemIsHidden = leftFileItem.isHidden();
-@@ -244,6 +294,15 @@ bool KDirSortFilterProxyModel::subSortLessThan(const QModelIndex &left, const QM
+@@ -244,6 +295,15 @@ bool KDirSortFilterProxyModel::subSortLessThan(const QModelIndex &left, const QM
      }
  
      case KDirModel::ModifiedTime: {
@@ -1452,7 +1453,7 @@ index 3e033cf..98c5d30 100644
          const auto rightModifiedTime = rightFileItem.entry().numberValue(KIO::UDSEntry::UDS_MODIFICATION_TIME);
  
 diff --git a/src/filewidgets/kfileplacesview.cpp b/src/filewidgets/kfileplacesview.cpp
-index dc8f0f3..edcd8e7 100644
+index dc8f0f3..ec93d8a 100644
 --- a/src/filewidgets/kfileplacesview.cpp
 +++ b/src/filewidgets/kfileplacesview.cpp
 @@ -16,6 +16,7 @@
@@ -1586,7 +1587,7 @@ index dc8f0f3..edcd8e7 100644
      } else {
          // Make it a multiple of 16
          size &= ~0xf;
-@@ -1933,9 +1987,34 @@ void KFilePlacesViewPrivate::updateHiddenRows()
+@@ -1933,9 +1987,43 @@ void KFilePlacesViewPrivate::updateHiddenRows()
      int rowCount = placesModel->rowCount();
      QModelIndex current = placesModel->closestItem(m_currentUrl);
  
@@ -1615,15 +1616,24 @@ index dc8f0f3..edcd8e7 100644
 +        return system.contains(access->filePath()) || QStorageInfo(access->filePath()).device() == homeDevice;
 +    };
 +
++    // kio-ng: "Recent Locations" is not shown: the list of what happened lately ("Recent Files") has the folders too.
++    // RecentLocations=true in dialog-ngrc [View], or Dolphin NG's setting RECENT_LOCATIONS, brings it back
++    const bool ngHideLocations = !m_showAll && q->property("_ng_home_disk_box").toBool()
++        && !KConfig(QStringLiteral("dialog-ngrc")).group(QStringLiteral("View")).readEntry("RecentLocations", false)
++        && KConfig(QStringLiteral("dolphinrc")).group(QStringLiteral("DolphinNG")).readEntry("RECENT_LOCATIONS", QString()) != QLatin1String("1");
++    auto isRecentLocations = [&](const QModelIndex &index) {
++        return ngHideLocations && placesModel->url(index) == QUrl(QStringLiteral("recentlyused:/locations"));
++    };
++
      for (int i = 0; i < rowCount; ++i) {
          QModelIndex index = placesModel->index(i, 0);
 -        if (index != current && placesModel->isHidden(index) && !m_showAll) {
-+        if ((index != current && placesModel->isHidden(index) && !m_showAll) || isHomeDisk(index)) {
++        if ((index != current && placesModel->isHidden(index) && !m_showAll) || isHomeDisk(index) || isRecentLocations(index)) {
              q->setRowHidden(i, true);
          } else {
              q->setRowHidden(i, false);
 diff --git a/src/filewidgets/kfilewidget.cpp b/src/filewidgets/kfilewidget.cpp
-index 86abbf2..e70dee7 100644
+index 86abbf2..5fc8569 100644
 --- a/src/filewidgets/kfilewidget.cpp
 +++ b/src/filewidgets/kfilewidget.cpp
 @@ -64,6 +64,16 @@
@@ -2267,7 +2277,7 @@ index 86abbf2..e70dee7 100644
  
      m_toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
      m_toolbar->setMovable(false);
-@@ -1484,11 +2011,43 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1484,11 +2011,47 @@ void KFileWidgetPrivate::initPlacesPanel()
      m_placesDock->setTitleBarWidget(new KDEPrivate::KFileWidgetDockTitleBar(m_placesDock));
  
      m_placesView = new KFilePlacesView(m_placesDock);
@@ -2302,7 +2312,11 @@ index 86abbf2..e70dee7 100644
 +        // kio-ng: "Recent Files" is what happened lately to files and folders (created, downloaded, moved, made by an
 +        // action of Dolphin NG, opened): the ng-recent component's ngrecent:/, where it is installed. The desktop's own
 +        // list, only what applications opened, with RecentLegacy=true in dialog-ngrc [View] or Dolphin NG's setting
++        // (an application that allows only some schemes: the list is offered only if "ngrecent" is one of them, else
++        // the click would lead nowhere)
++        const QStringList allowed = m_ops->supportedSchemes();
 +        if (url.scheme() == QLatin1String("recentlyused") && url.path() == QLatin1String("/files") && KProtocolInfo::isKnownProtocol(QStringLiteral("ngrecent"))
++            && (allowed.isEmpty() || allowed.contains(QLatin1String("ngrecent")))
 +            && !KConfigGroup(KSharedConfig::openConfig(QStringLiteral("dialog-ngrc")), QStringLiteral("View")).readEntry("RecentLegacy", false)
 +            && KConfigGroup(KSharedConfig::openConfig(QStringLiteral("dolphinrc")), QStringLiteral("DolphinNG")).readEntry("RECENT_LEGACY", QString()) != QLatin1String("1")) {
 +            enterUrl(QUrl(QStringLiteral("ngrecent:/")));
@@ -2311,7 +2325,7 @@ index 86abbf2..e70dee7 100644
          enterUrl(url);
      });
  
-@@ -1503,11 +2062,12 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1503,11 +2066,12 @@ void KFileWidgetPrivate::initPlacesPanel()
      // TODO: KDE5 ### REMOVE THIS when KDirOperator's initial URL (in the c'tor) is gone.
      m_placesView->setUrl(m_url);
  
@@ -2326,7 +2340,7 @@ index 86abbf2..e70dee7 100644
  
      // Needed for when the dialog is shown with the places panel initially hidden
      setPlacesViewSplitterSizes();
-@@ -1614,6 +2174,670 @@ void KFileWidgetPrivate::initGUI()
+@@ -1614,6 +2178,667 @@ void KFileWidgetPrivate::initGUI()
      updateTabOrder();
  }
  
@@ -2680,13 +2694,10 @@ index 86abbf2..e70dee7 100644
 +    default:
 +        by = ngLabel(nullptr, nullptr, "Name", "Nome");
 +    }
-+    // the list of what happened lately has one order, the latest first, whatever is chosen for folders: the button says
-+    // so and offers nothing (it read "Name" over a list that was not by name)
++    // the list of what happened lately has one order, the latest first, whatever is chosen for folders: no sort button
++    // there (it read "Name" over a list that was not by name, and the order is what the list is for)
 +    const bool recent = m_ops->url().scheme() == QLatin1String("ngrecent");
-+    if (recent) {
-+        by = ngLabel(nullptr, nullptr, "Latest first", "Più recenti");
-+    }
-+    m_ngSortButton->setEnabled(!recent);
++    m_ngSortButton->setVisible(!recent);
 +    m_ngSortButton->setText(by);
 +    m_ngSortButton->setToolTip(ngLabel(nullptr, nullptr, "Sort: %1", "Ordina: %1").arg(by));
 +    m_ngSortButton->setIcon(QIcon::fromTheme((recent || (sorting & QDir::Reversed)) ? QStringLiteral("view-sort-descending") : QStringLiteral("view-sort-ascending")));
@@ -2997,7 +3008,7 @@ index 86abbf2..e70dee7 100644
  void KFileWidgetPrivate::slotFileFilterChanged()
  {
      m_filterDelayTimer.stop();
-@@ -1706,8 +2930,10 @@ void KFileWidgetPrivate::urlEntered(const QUrl &url)
+@@ -1706,8 +2931,10 @@ void KFileWidgetPrivate::urlEntered(const QUrl &url)
      }
  
      if (m_placesView) {
@@ -3009,7 +3020,7 @@ index 86abbf2..e70dee7 100644
  
      m_messageWidget->hide();
  }
-@@ -2012,7 +3238,8 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2012,7 +3239,8 @@ void KFileWidget::showEvent(QShowEvent *event)
      if (!d->m_hasView) { // delayed view-creation
          Q_ASSERT(d);
          Q_ASSERT(d->m_ops);
@@ -3019,7 +3030,7 @@ index 86abbf2..e70dee7 100644
          d->m_hasView = true;
  
          connect(d->m_ops->view(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
-@@ -2022,6 +3249,9 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2022,6 +3250,9 @@ void KFileWidget::showEvent(QShowEvent *event)
      d->m_ops->clearHistory();
  
      QWidget::showEvent(event);
@@ -3029,7 +3040,7 @@ index 86abbf2..e70dee7 100644
  }
  
  bool KFileWidget::eventFilter(QObject *watched, QEvent *event)
-@@ -2058,6 +3288,7 @@ void KFileWidget::setMode(KFile::Modes m)
+@@ -2058,6 +3289,7 @@ void KFileWidget::setMode(KFile::Modes m)
      }
  
      d->updateAutoSelectExtension();
@@ -3037,7 +3048,7 @@ index 86abbf2..e70dee7 100644
      // Need to make sure we enable the okButton when expected to do so,
      // since it's possible we call setMode and setOperationMode in different order.
      if (d->currentDirSelectable()) {
-@@ -2087,6 +3318,24 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2087,6 +3319,24 @@ void KFileWidgetPrivate::readViewConfig()
      m_ops->setViewConfig(m_configGroup);
      m_ops->readConfig(m_configGroup);
  
@@ -3062,7 +3073,7 @@ index 86abbf2..e70dee7 100644
      // Show or don't show the places panel
      togglePlacesPanel(m_configGroup.readEntry(ShowSpeedbar, true));
  
-@@ -2095,7 +3344,7 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2095,7 +3345,7 @@ void KFileWidgetPrivate::readViewConfig()
      updateAutoSelectExtension();
  
      // should the URL navigator use the breadcrumb navigation?
@@ -3071,7 +3082,7 @@ index 86abbf2..e70dee7 100644
  
      // should the URL navigator show the full path?
      m_urlNavigator->setShowFullPath(m_configGroup.readEntry(ShowFullPath, false));
-@@ -2207,9 +3456,6 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2207,9 +3457,6 @@ void KFileWidget::setOperationMode(OperationMode mode)
          // don't use KStandardGuiItem::open() here which has trailing ellipsis!
          d->m_okButton->setText(i18n("&Open"));
          d->m_okButton->setIcon(QIcon::fromTheme(QStringLiteral("document-open")));
@@ -3081,7 +3092,7 @@ index 86abbf2..e70dee7 100644
      } else if (mode == Saving) {
          KGuiItem::assign(d->m_okButton, KStandardGuiItem::save());
          d->m_okButton->setEnabled(d->currentDirSelectable() || !d->m_locationEdit->lineEdit()->text().isEmpty());
-@@ -2217,6 +3463,7 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2217,6 +3464,7 @@ void KFileWidget::setOperationMode(OperationMode mode)
      } else {
          KGuiItem::assign(d->m_okButton, KStandardGuiItem::ok());
      }
@@ -3089,7 +3100,7 @@ index 86abbf2..e70dee7 100644
      d->updateLocationWhatsThis();
      d->updateAutoSelectExtension();
  
-@@ -2226,6 +3473,17 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2226,6 +3474,17 @@ void KFileWidget::setOperationMode(OperationMode mode)
      d->updateFilterText();
  }
  
