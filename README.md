@@ -50,7 +50,7 @@ It looks and works like [Dolphin NG](https://github.com/Morzilla/dolphin-ng):
 and the program under each name: the picture you just pasted into a folder or the file you just downloaded is
 the first thing an upload window offers. With the [ng-fsevents](https://github.com/Morzilla/ng-fsevents) service
 it also has what programs changed anywhere in the home. KDE's own list comes back with `RecentLegacy=true`, and
-"Recent Locations" with `RecentLocations=true`, in `~/.config/dialog-ngrc`.
+"Recent Locations" with `RecentLocations=true`, in the `[View]` group of `~/.config/dialog-ngrc`.
 
 ![Recent Files in the Open window](screenshots/recent-files.png)
 
