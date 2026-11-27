@@ -1633,7 +1633,7 @@ index dc8f0f3..ec93d8a 100644
          } else {
              q->setRowHidden(i, false);
 diff --git a/src/filewidgets/kfilewidget.cpp b/src/filewidgets/kfilewidget.cpp
-index 86abbf2..5fc8569 100644
+index 86abbf2..c60d94e 100644
 --- a/src/filewidgets/kfilewidget.cpp
 +++ b/src/filewidgets/kfilewidget.cpp
 @@ -64,6 +64,16 @@
@@ -2158,7 +2158,25 @@ index 86abbf2..5fc8569 100644
      QUrl startDir(_startDir);
      // qDebug() << "startDir" << startDir;
      QString filename;
-@@ -1087,10 +1574,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
+@@ -995,7 +1482,16 @@ void KFileWidgetPrivate::multiSelectionChanged()
+ 
+     // Allow single folder selection, so user can click "Open" to open it
+     if (list.length() == 1 && list.first().isDir()) {
+-        setLocationText(list.first().targetUrl());
++        // kio-ng: a folder of a list that is not its own folder (what happened lately, recent files): its name is
++        // written without going to where it is. Going there, as for a folder of the current one, left the list on a
++        // single click, and not through the history: "Back" did not come back to the list
++        const QUrl target = list.first().targetUrl();
++        const QUrl parent = target.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash);
++        if (!parent.matches(m_ops->url(), QUrl::StripTrailingSlash)) {
++            setLocationText(QList<QUrl>{target});
++            return;
++        }
++        setLocationText(target);
+         return;
+     }
+     // Remove any selected folders from the locations
+@@ -1087,10 +1583,8 @@ void KFileWidgetPrivate::initDirOpWidgets()
      const auto navWidget = new QWidget(m_opsWidget);
      const auto navLayout = new QHBoxLayout(navWidget);
      navLayout->addWidget(m_urlNavigator);
@@ -2171,7 +2189,7 @@ index 86abbf2..5fc8569 100644
  
      m_messageWidget = new KMessageWidget(q);
      m_messageWidget->setMessageType(KMessageWidget::Error);
-@@ -1146,9 +1631,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
+@@ -1146,9 +1640,11 @@ void KFileWidgetPrivate::initDirOpWidgets()
      initToolbar();
  
      m_opsWidgetLayout->addWidget(m_toolbar);
@@ -2184,7 +2202,7 @@ index 86abbf2..5fc8569 100644
      m_opsWidgetLayout->addWidget(m_ops);
      m_opsWidgetLayout->addWidget(bottomSparator);
  }
-@@ -1277,32 +1764,72 @@ void KFileWidgetPrivate::initToolbar()
+@@ -1277,32 +1773,72 @@ void KFileWidgetPrivate::initToolbar()
      });
      m_bookmarkButton->setMenu(m_bookmarkHandler->menu());
  
@@ -2277,7 +2295,7 @@ index 86abbf2..5fc8569 100644
  
      m_toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
      m_toolbar->setMovable(false);
-@@ -1484,11 +2011,47 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1484,11 +2020,47 @@ void KFileWidgetPrivate::initPlacesPanel()
      m_placesDock->setTitleBarWidget(new KDEPrivate::KFileWidgetDockTitleBar(m_placesDock));
  
      m_placesView = new KFilePlacesView(m_placesDock);
@@ -2325,7 +2343,7 @@ index 86abbf2..5fc8569 100644
          enterUrl(url);
      });
  
-@@ -1503,11 +2066,12 @@ void KFileWidgetPrivate::initPlacesPanel()
+@@ -1503,11 +2075,12 @@ void KFileWidgetPrivate::initPlacesPanel()
      // TODO: KDE5 ### REMOVE THIS when KDirOperator's initial URL (in the c'tor) is gone.
      m_placesView->setUrl(m_url);
  
@@ -2340,7 +2358,7 @@ index 86abbf2..5fc8569 100644
  
      // Needed for when the dialog is shown with the places panel initially hidden
      setPlacesViewSplitterSizes();
-@@ -1614,6 +2178,667 @@ void KFileWidgetPrivate::initGUI()
+@@ -1614,6 +2187,667 @@ void KFileWidgetPrivate::initGUI()
      updateTabOrder();
  }
  
@@ -3008,7 +3026,7 @@ index 86abbf2..5fc8569 100644
  void KFileWidgetPrivate::slotFileFilterChanged()
  {
      m_filterDelayTimer.stop();
-@@ -1706,8 +2931,10 @@ void KFileWidgetPrivate::urlEntered(const QUrl &url)
+@@ -1706,8 +2940,10 @@ void KFileWidgetPrivate::urlEntered(const QUrl &url)
      }
  
      if (m_placesView) {
@@ -3020,7 +3038,7 @@ index 86abbf2..5fc8569 100644
  
      m_messageWidget->hide();
  }
-@@ -2012,7 +3239,8 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2012,7 +3248,8 @@ void KFileWidget::showEvent(QShowEvent *event)
      if (!d->m_hasView) { // delayed view-creation
          Q_ASSERT(d);
          Q_ASSERT(d->m_ops);
@@ -3030,7 +3048,7 @@ index 86abbf2..5fc8569 100644
          d->m_hasView = true;
  
          connect(d->m_ops->view(), &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) {
-@@ -2022,6 +3250,9 @@ void KFileWidget::showEvent(QShowEvent *event)
+@@ -2022,6 +3259,9 @@ void KFileWidget::showEvent(QShowEvent *event)
      d->m_ops->clearHistory();
  
      QWidget::showEvent(event);
@@ -3040,7 +3058,7 @@ index 86abbf2..5fc8569 100644
  }
  
  bool KFileWidget::eventFilter(QObject *watched, QEvent *event)
-@@ -2058,6 +3289,7 @@ void KFileWidget::setMode(KFile::Modes m)
+@@ -2058,6 +3298,7 @@ void KFileWidget::setMode(KFile::Modes m)
      }
  
      d->updateAutoSelectExtension();
@@ -3048,7 +3066,7 @@ index 86abbf2..5fc8569 100644
      // Need to make sure we enable the okButton when expected to do so,
      // since it's possible we call setMode and setOperationMode in different order.
      if (d->currentDirSelectable()) {
-@@ -2087,6 +3319,24 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2087,6 +3328,24 @@ void KFileWidgetPrivate::readViewConfig()
      m_ops->setViewConfig(m_configGroup);
      m_ops->readConfig(m_configGroup);
  
@@ -3073,7 +3091,7 @@ index 86abbf2..5fc8569 100644
      // Show or don't show the places panel
      togglePlacesPanel(m_configGroup.readEntry(ShowSpeedbar, true));
  
-@@ -2095,7 +3345,7 @@ void KFileWidgetPrivate::readViewConfig()
+@@ -2095,7 +3354,7 @@ void KFileWidgetPrivate::readViewConfig()
      updateAutoSelectExtension();
  
      // should the URL navigator use the breadcrumb navigation?
@@ -3082,7 +3100,7 @@ index 86abbf2..5fc8569 100644
  
      // should the URL navigator show the full path?
      m_urlNavigator->setShowFullPath(m_configGroup.readEntry(ShowFullPath, false));
-@@ -2207,9 +3457,6 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2207,9 +3466,6 @@ void KFileWidget::setOperationMode(OperationMode mode)
          // don't use KStandardGuiItem::open() here which has trailing ellipsis!
          d->m_okButton->setText(i18n("&Open"));
          d->m_okButton->setIcon(QIcon::fromTheme(QStringLiteral("document-open")));
@@ -3092,7 +3110,7 @@ index 86abbf2..5fc8569 100644
      } else if (mode == Saving) {
          KGuiItem::assign(d->m_okButton, KStandardGuiItem::save());
          d->m_okButton->setEnabled(d->currentDirSelectable() || !d->m_locationEdit->lineEdit()->text().isEmpty());
-@@ -2217,6 +3464,7 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2217,6 +3473,7 @@ void KFileWidget::setOperationMode(OperationMode mode)
      } else {
          KGuiItem::assign(d->m_okButton, KStandardGuiItem::ok());
      }
@@ -3100,7 +3118,7 @@ index 86abbf2..5fc8569 100644
      d->updateLocationWhatsThis();
      d->updateAutoSelectExtension();
  
-@@ -2226,6 +3474,17 @@ void KFileWidget::setOperationMode(OperationMode mode)
+@@ -2226,6 +3483,17 @@ void KFileWidget::setOperationMode(OperationMode mode)
      d->updateFilterText();
  }
  
