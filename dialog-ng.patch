@@ -1453,7 +1453,7 @@ index 3e033cf..6f2354c 100644
          const auto rightModifiedTime = rightFileItem.entry().numberValue(KIO::UDSEntry::UDS_MODIFICATION_TIME);
  
 diff --git a/src/filewidgets/kfileplacesview.cpp b/src/filewidgets/kfileplacesview.cpp
-index dc8f0f3..ec93d8a 100644
+index dc8f0f3..d1822da 100644
 --- a/src/filewidgets/kfileplacesview.cpp
 +++ b/src/filewidgets/kfileplacesview.cpp
 @@ -16,6 +16,7 @@
@@ -1587,7 +1587,7 @@ index dc8f0f3..ec93d8a 100644
      } else {
          // Make it a multiple of 16
          size &= ~0xf;
-@@ -1933,9 +1987,43 @@ void KFilePlacesViewPrivate::updateHiddenRows()
+@@ -1933,9 +1987,47 @@ void KFilePlacesViewPrivate::updateHiddenRows()
      int rowCount = placesModel->rowCount();
      QModelIndex current = placesModel->closestItem(m_currentUrl);
  
@@ -1618,8 +1618,12 @@ index dc8f0f3..ec93d8a 100644
 +
 +    // kio-ng: "Recent Locations" is not shown: the list of what happened lately ("Recent Files") has the folders too.
 +    // RecentLocations=true in dialog-ngrc [View], or Dolphin NG's setting RECENT_LOCATIONS, brings it back
-+    const bool ngHideLocations = !m_showAll && q->property("_ng_home_disk_box").toBool()
++    // (only where that list is shown: without the ng-recent component, or with the desktop's own "Recent Files" chosen,
++    // the place stays as it was)
++    const bool ngHideLocations = !m_showAll && q->property("_ng_home_disk_box").toBool() && KProtocolInfo::isKnownProtocol(QStringLiteral("ngrecent"))
 +        && !KConfig(QStringLiteral("dialog-ngrc")).group(QStringLiteral("View")).readEntry("RecentLocations", false)
++        && !KConfig(QStringLiteral("dialog-ngrc")).group(QStringLiteral("View")).readEntry("RecentLegacy", false)
++        && KConfig(QStringLiteral("dolphinrc")).group(QStringLiteral("DolphinNG")).readEntry("RECENT_LEGACY", QString()) != QLatin1String("1")
 +        && KConfig(QStringLiteral("dolphinrc")).group(QStringLiteral("DolphinNG")).readEntry("RECENT_LOCATIONS", QString()) != QLatin1String("1");
 +    auto isRecentLocations = [&](const QModelIndex &index) {
 +        return ngHideLocations && placesModel->url(index) == QUrl(QStringLiteral("recentlyused:/locations"));
