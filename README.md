@@ -45,6 +45,15 @@ It looks and works like [Dolphin NG](https://github.com/Morzilla/dolphin-ng):
 
 ![The quick preview](screenshots/quick-preview.png)
 
+**Recent Files that tell what happened.** With [ng-recent](https://github.com/Morzilla/ng-recent) installed, the
+"Recent Files" place lists what was downloaded, made, added or modified lately, the latest first, with the event
+and the program under each name: the picture you just pasted into a folder or the file you just downloaded is
+the first thing an upload window offers. With the [ng-fsevents](https://github.com/Morzilla/ng-fsevents) service
+it also has what programs changed anywhere in the home. KDE's own list comes back with `RecentLegacy=true`, and
+"Recent Locations" with `RecentLocations=true`, in `~/.config/dialog-ngrc`.
+
+![Recent Files in the Open window](screenshots/recent-files.png)
+
 The settings are shared by every application (`~/.config/dialog-ngrc`); Dolphin NG's settings page has the
 quick preview's too (NG → Previews → Open/Save window). `Glass=false` in its `[Sidebar]` group turns the glass
 off.
